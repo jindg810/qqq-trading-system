@@ -45,6 +45,21 @@ live_trader.py          trader_web.py
 | `today.csv` | 当日K线数据（自动生成） |
 | `records/*.json` | 每日交易记录（自动生成） |
 
+/home/jindaguai/works/qqq-trading-system/
+├── script/
+│   ├── trader.py          # 原 live_trader.py
+│   ├── trader_web.py
+│   ├── config.py
+│   └── update_gist.py
+├── data/
+│   ├── state.json
+│   ├── today.csv
+│   └── records/
+├── logs/
+│   └── trader.log
+├── .env
+└── requirements.txt
+
 ---
 
 ## 2. 策略逻辑
