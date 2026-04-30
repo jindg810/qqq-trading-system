@@ -29,6 +29,7 @@ from longbridge.openapi import (
     OrderSide,
     OrderType,
     OrderStatus,
+    TimeInForce,
     SubType
 )
 
@@ -96,7 +97,7 @@ class QQQTrader:
                 csv.writer(f).writerow(["ts", "open", "high", "low", "close", "volume"])
 
     def get_today_csv(self):
-        return os.path.join(CONFIG["data_dir"], CONFIG["csv_file"])
+        return CONFIG["csv_file"]
     
     def archive_csv(self):
         """ 归档当日 CSV（移动到 records 目录）"""
@@ -108,7 +109,7 @@ class QQQTrader:
 
             today_csv = self.get_today_csv()
             archive_dir = CONFIG["records_dir"]
-            archive_csv = os.path.join(archive_dir, f"{now.strftime("%Y-%m-%d")}.csv")
+            archive_csv = os.path.join(archive_dir, f"{now.strftime('%Y-%m-%d')}.csv")
 
             os.makedirs(archive_dir, exist_ok=True)
             if os.path.exists(archive_csv):

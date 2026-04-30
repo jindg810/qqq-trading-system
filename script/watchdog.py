@@ -1,7 +1,7 @@
 import subprocess, time, os
 
 CMDS = [
-    ["python", "live_trader.py"],
+    ["python", "trader.py"],
     ["python", "trader_web.py"]
 ]
 
