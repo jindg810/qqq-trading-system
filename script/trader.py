@@ -14,8 +14,10 @@ import traceback
 import shutil
 from datetime import datetime
 from collections import deque
+from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
 from logger import get_logger
+from trader_data import TraderDataManager
 
 # ===================== 导入配置 =====================
 from config import CONFIG, DATA_DIR
@@ -41,13 +43,27 @@ logger = get_logger(__name__)
 # ===================== 交易引擎 =====================
 class QQQTrader:
     def __init__(self):
-        self.init_state_file()
-        self.load_state()
+        logger.system("初始化交易引擎...")
         
+        # 使用数据管理器
+        self.data_manager = TraderDataManager()
+        
+        # 交易状态
+        self.position = None
+        self.trades_today = 0
         self.consecutive_losses = 0
         self.daily_pnl = 0.0
         self.emergency_stopped = False
         self.state_lock = False
+
+        self.bars = deque(maxlen=200)          # K线数据
+        self.sma20_vol = deque(maxlen=20)     # 成交量数据
+        self.trades_log = []                   # 交易记录
+        self.bar_counter = 0                   # K线计数器
+        
+        # 初始化状态文件
+        self.init_state_file()
+        self.load_state()
         
         try:
             cfg = Config.from_apikey_env()
@@ -58,29 +74,20 @@ class QQQTrader:
             logger.error(f"❌ 长桥初始化失败: {e}")
             raise
 
-        self.bar_counter = 0
-        self.bars = deque(maxlen=200)
-        self.sma20_vol = deque(maxlen=20)
-        self.trades_log = []
-        self.init_csv()
-
-    # ================== 文件管理 ==================
-    def atomic_write_json(self, filepath, data):
-        temp_path = f"{filepath}.tmp"
-        try:
-            with open(temp_path, 'w') as f:
-                json.dump(data, f, indent=2)
-            shutil.move(temp_path, filepath)
-            return True
-        except Exception as e:
-            logger.error(f"写入文件失败 {filepath}: {e}")
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            return False
+    # ================== 状态管理 ==================
+    def load_state(self):
+        """加载状态"""
+        state = self.data_manager.load_state()
+        if state:
+            self.position = state.get("position")
+            self.trades_today = state.get("trades_today", 0)
+            self.consecutive_losses = state.get("consecutive_losses", 0)
+            self.daily_pnl = state.get("daily_pnl", 0.0)
+            self.emergency_stopped = state.get("emergency_stopped", False)
 
     def init_state_file(self):
         if not os.path.exists(CONFIG["state_file"]):
-            self.atomic_write_json(CONFIG["state_file"], {
+            self.data_manager.save_state({
                 "running": False,
                 "position": None,
                 "trades_today": 0,
@@ -88,66 +95,8 @@ class QQQTrader:
                 "daily_pnl": 0.0
             })
 
-    def init_csv(self):
-        csv_path = self.get_today_csv()
-        os.makedirs(DATA_DIR, exist_ok=True)
-
-        if not os.path.exists(csv_path):
-            with open(csv_path, "w", newline="") as f:
-                csv.writer(f).writerow(["ts", "open", "high", "low", "close", "volume"])
-
-    def get_today_csv(self):
-        return CONFIG["csv_file"]
-    
-    def archive_csv(self):
-        """ 归档当日 CSV（移动到 records 目录）"""
-        try:
-            now = self.now_et()
-            # ✅ 只在收盘后执行（16:05 之后）
-            if not (now.hour == 16 and now.minute >= 5):
-                return
-
-            today_csv = self.get_today_csv()
-            archive_dir = CONFIG["records_dir"]
-            archive_csv = os.path.join(archive_dir, f"{now.strftime('%Y-%m-%d')}.csv")
-
-            os.makedirs(archive_dir, exist_ok=True)
-            if os.path.exists(archive_csv):
-                # logger.info("归档已存在，跳过")
-                return
-            
-            if not os.path.exists(today_csv):
-                logger.warning(f"归档失败：{today_csv} 不存在")
-                return
-
-            shutil.move(today_csv, archive_csv)
-            logger.info(f"📁 已归档 CSV: {archive_csv}")
-
-            # ✅ 重新创建空 today.csv
-            self.init_csv()
-            logger.info("✅ 收盘归档完成")
-
-        except Exception as e:
-            logger.error(f"归档 CSV 失败: {e}")
-            logger.exception("归档异常详情")
-
-    def write_kline(self, bar):
-        """写入K线数据到CSV文件"""
-        try:
-            with open(self.get_today_csv(), "a", newline="") as f:
-                csv.writer(f).writerow([
-                    self.now_et().isoformat(),
-                    bar["open"],
-                    bar["high"],
-                    bar["low"],
-                    bar["close"],
-                    bar["volume"]
-                ])
-        except Exception as e:
-            logger.error(f"写入K线失败: {e}")
-
-    # ================== 状态管理 ==================
     def save_state(self):
+        """保存状态"""
         if self.state_lock:
             return
             
@@ -162,24 +111,54 @@ class QQQTrader:
                 "daily_pnl": round(self.daily_pnl, 2),
                 "emergency_stopped": self.emergency_stopped
             }
-            self.atomic_write_json(CONFIG["state_file"], state)
+            self.data_manager.save_state(state)
         finally:
             self.state_lock = False
 
-    def load_state(self):
+    # ================== K线数据管理 ==================
+    def validate_bar(self, bar: Dict[str, Any]) -> bool:
+        """验证K线数据有效性"""
+        required_fields = ["open", "high", "low", "close"]
+        for field in required_fields:
+            if field not in bar:
+                logger.error(f"K线缺少字段: {field}")
+                return False
+            
+            if not isinstance(bar[field], (int, float)):
+                logger.error(f"K线字段 {field} 不是数字")
+                return False
+        
+        # 验证OHLC关系
+        if bar["high"] < bar["low"]:
+            logger.error("最高价低于最低价")
+            return False
+        
+        if bar["open"] > bar["high"] or bar["open"] < bar["low"]:
+            logger.error("开盘价超出高低范围")
+            return False
+        
+        if bar["close"] > bar["high"] or bar["close"] < bar["low"]:
+            logger.error("收盘价超出高低范围")
+            return False
+        
+        return True
+    
+    def write_kline_to_csv(self, bar: Dict[str, Any]) -> None:  
+        """写入K线到当日CSV"""
         try:
-            with open(CONFIG["state_file"], "r") as f:
-                s = json.load(f)
-                self.position = s.get("position")
-                self.trades_today = s.get("trades_today", 0)
-                self.consecutive_losses = s.get("consecutive_losses", 0)
-                self.daily_pnl = s.get("daily_pnl", 0.0)
-                self.emergency_stopped = s.get("emergency_stopped", False)
-        except:
-            self.position, self.trades_today = None, 0
-            self.consecutive_losses, self.daily_pnl = 0, 0.0
-            self.emergency_stopped = False
+            if not self.validate_bar(bar):
+                logger.warning(f"无效K线数据，已忽略: {bar}")
+                return;
+    
+            """添加K线数据"""
+            self.bars.append(bar)
+            self.sma20_vol.append(bar.get("volume", 0))
+            self.bar_counter += 1
+            self.data_manager.write_kline_to_csv(bar)
 
+        except Exception as e:
+            logger.error(f"写入K线失败: {e}")
+    
     # ================== 风控检查 ==================
     def check_risk_controls(self):
         if self.emergency_stopped:
@@ -224,7 +203,7 @@ class QQQTrader:
         
         return market_open <= current_time <= market_close
 
-    def option_symbol(self, price, side):
+    def generate_option_symbol(self, price, side):
         try:
             if price <= 0:
                 logger.error("无效的标的价格")
@@ -268,7 +247,7 @@ class QQQTrader:
         if not self.check_risk_controls():
             return False
             
-        symbol = self.option_symbol(price, side)
+        symbol = self.generate_option_symbol(price, side)
         if not symbol:
             return False
             
@@ -444,7 +423,7 @@ class QQQTrader:
             if not self.is_trading_hours():
                 return
                 
-            if not hasattr(quote, "candlesticks"):
+            if not hasattr(quote, "candlesticks") or not quote.candlesticks:
                 return
                 
             for cs in quote.candlesticks:
@@ -462,6 +441,9 @@ class QQQTrader:
                 self.bars.append(bar)
                 self.sma20_vol.append(bar["volume"])
                 self.write_kline(bar)
+                # 验证K线数据
+                #self.data_manager.add_bar(bar)
+                self.write_kline_to_csv(bar)
                 
                 if not self.check_risk_controls():
                     return
@@ -478,13 +460,12 @@ class QQQTrader:
                 else:
                     self.manage_position()
 
-            # 降低保存频率（每5根K线）
-            self.bar_counter += 1
-            if self.bar_counter % 5 == 0:
+            # 定期保存状态
+            if self.data_manager.bar_counter % 5 == 0:
                 self.save_state()
 
             # ✅ 收盘检查（> 16:00整）
-            self.archive_csv()
+            self.data_manager.archive_csv()
             
         except Exception as e:
             logger.error(f"行情处理异常: {e}")
