@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from logger import get_logger
 
 # ===================== 导入配置 =====================
-from config import CONFIG
+from config import CONFIG, DATA_DIR
 
 # ===================== 导入长桥 SDK（模块级别）=====================
 from longbridge.openapi import (
@@ -29,7 +29,7 @@ from longbridge.openapi import (
     OrderSide,
     OrderType,
     OrderStatus,
-    TimeInForce,
+    TimeInForceType,
     SubType
 )
 
@@ -90,7 +90,7 @@ class QQQTrader:
 
     def init_csv(self):
         csv_path = self.get_today_csv()
-        os.makedirs(CONFIG["data_dir"], exist_ok=True)
+        os.makedirs(DATA_DIR, exist_ok=True)
 
         if not os.path.exists(csv_path):
             with open(csv_path, "w", newline="") as f:
@@ -280,7 +280,7 @@ class QQQTrader:
                 quantity=CONFIG["max_position_size"],
                 side=OrderSide.Buy,
                 type=OrderType.Market,
-                time_in_force=TimeInForce.Day
+                time_in_force=TimeInForceType.Day
             )
             
             order_id = self.tc.submit(order)
@@ -326,7 +326,7 @@ class QQQTrader:
                 quantity=CONFIG["max_position_size"],
                 side=OrderSide.Sell,
                 type=OrderType.Market,
-                time_in_force=TimeInForce.Day
+                time_in_force=TimeInForceType.Day
             )
             
             order_id = self.tc.submit(order)

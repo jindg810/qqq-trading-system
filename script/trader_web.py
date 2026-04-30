@@ -13,12 +13,13 @@ from datetime import datetime
 from flask import Flask, request, jsonify, render_template
 from dotenv import load_dotenv
 import requests
+from logger import get_logger
 
 # 导入配置
 from config import CONFIG
 
 load_dotenv()
-
+logger = get_logger(__name__)
 app = Flask(__name__, template_folder='../templates')
 
 # ===================== 辅助函数 =====================
@@ -50,31 +51,55 @@ def get_qqq_quote():
         "volume": 12500000
     }
 
+def parse_account_balance(balance):
+    """解析 AccountBalance 对象"""
+    try:
+        # 从 cash_infos 中获取 USD 现金信息
+        usd_cash_info = None
+        for cash_info in balance.cash_infos:
+            if cash_info.currency == "USD":
+                usd_cash_info = cash_info
+                break
+        
+        return {
+            "net_assets": round(float(balance.net_assets), 2),
+            "power": round(float(balance.buy_power), 2),
+            "limit": "无限制",
+            "currency": balance.currency,
+            "cash": round(float(balance.total_cash), 2),
+            "risk_level": balance.risk_level,
+            "margin_call": balance.margin_call
+        }
+    except Exception as e:
+        logger.error(f"解析账户余额失败: {e}")
+        return {
+            "net_assets": 50000.00,
+            "cash": 25000.00,
+            "power": 100000.00,
+            "limit": "无限制"
+        }
+
 def get_account_info():
-    """获取账户信息"""
+    """获取账户信息（修复版）"""
     try:
         from longbridge.openapi import Config, TradeContext
         cfg = Config.from_apikey_env()
         tc = TradeContext(cfg)
-        accounts = tc.accounts()
-        if accounts and len(accounts) > 0:
-            acc = accounts[0]
-            return {
-                "net_assets": round(float(acc.net_assets), 2),
-                "cash": round(float(acc.cash), 2),
-                "power": round(float(acc.buying_power), 2),
-                "limit": "无限制"
-            }
+        
+        # ✅ 调用 account_balance() 方法
+        balance_list = tc.account_balance()
+        
+        # ✅ 解析 AccountBalance 对象
+        return parse_account_balance(balance_list[0])
+        
     except Exception as e:
-        print(f"获取账户信息失败: {e}")
-    
-    # 返回模拟数据
-    return {
-        "net_assets": 50000.00,
-        "cash": 25000.00,
-        "power": 100000.00,
-        "limit": "无限制"
-    }
+        logger.error(f"获取账户信息失败: {e}")
+        return {
+            "net_assets": 50000.00,
+            "cash": 25000.00,
+            "power": 100000.00,
+            "limit": "无限制"
+        }
 
 def read_logs():
     """读取日志文件"""
