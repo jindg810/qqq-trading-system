@@ -31,11 +31,11 @@ STRATEGY_CONFIG = {
     "sma_period": 20,
     "vol_mult": 0.8,
     "min_body_pct": 0.0003,
-    "breakout_max": 8,
-    "reversal_max": 1,
-    "sl_pct": 0.25,
-    "tp_half": 1.0,
-    "trail_pct": 0.3,
+    "breakout_max": 8, # 突破最大持仓数量
+    "reversal_max": 1, # 反转最大持仓数量
+    "sl_pct": 0.25, # 止损百分比
+    "tp_half": 1.0, # 盈亏比达到1倍时止盈一半
+    "trail_pct": 0.3, # 盈亏比达到0.3倍时开始移动止损
     "timeout_bars": 15,
     "offset": 2.0,
 }
@@ -86,15 +86,40 @@ def get_config():
 def validate_config(config):
     errors = []
     
+    # 策略参数验证
     if config["lookback"] <= 0:
         errors.append("lookback 必须大于0")
     if config["sma_period"] <= 0:
         errors.append("sma_period 必须大于0")
+    if config["vol_mult"] <= 0 or config["vol_mult"] > 1:
+        errors.append("vol_mult 必须在 (0,1] 之间")
+    if config["min_body_pct"] <= 0:
+        errors.append("min_body_pct 必须大于0")
     if config["sl_pct"] <= 0 or config["sl_pct"] >= 1:
         errors.append("sl_pct 必须在0-1之间")
+    if config["breakout_max"] <= 0:
+        errors.append("breakout_max 必须为正整数")
+    if config["reversal_max"] <= 0:
+        errors.append("reversal_max 必须为正整数")
+    if config["offset"] <= 0:
+        errors.append("offset 必须大于0")
+    
+    # 风控参数验证
     if config["max_daily_loss"] >= 0:
         errors.append("max_daily_loss 必须为负数")
+    if config["max_consecutive_losses"] <= 0:
+        errors.append("max_consecutive_losses 必须为正整数")
+    if config["order_check_timeout"] <= 0:
+        errors.append("order_check_timeout 必须为正数")
+    if config["order_check_interval"] <= 0:
+        errors.append("order_check_interval 必须为正数")
+    if config["max_position_size"] <= 0:
+        errors.append("max_position_size 必须为正整数")
     
+    # 系统参数验证
+    if config["check_interval"] <= 0:
+        errors.append("check_interval 必须为正数")
+
     return errors
 
 # ===================== 导出配置 =====================

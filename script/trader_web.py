@@ -17,6 +17,7 @@ from logger import get_logger
 
 # 导入配置
 from config import CONFIG
+from script.trader_data import TraderDataManager
 
 load_dotenv()
 logger = get_logger(__name__)
@@ -54,13 +55,6 @@ def get_qqq_quote():
 def parse_account_balance(balance):
     """解析 AccountBalance 对象"""
     try:
-        # 从 cash_infos 中获取 USD 现金信息
-        usd_cash_info = None
-        for cash_info in balance.cash_infos:
-            if cash_info.currency == "USD":
-                usd_cash_info = cash_info
-                break
-        
         return {
             "net_assets": round(float(balance.net_assets), 2),
             "power": round(float(balance.buy_power), 2),
@@ -141,6 +135,9 @@ def build_template_state(state_data):
     
     # 获取账户数据
     account_data = get_account_info()
+
+    data_manager = TraderDataManager()
+    data_summary = data_manager.get_data_summary()
     
     # 获取日志
     logs_data = read_logs()
@@ -158,7 +155,9 @@ def build_template_state(state_data):
         "data_source": "长桥证券 API",
         "engine_status": "运行中" if state_data.get("running", False) else "已停止",
         "version": "v6.1",
-        "symbol": CONFIG["symbol"]
+        "symbol": CONFIG["symbol"],
+        "last_bar_time": data_summary.get("last_bar_time", "无"),  # ✅ 显示最后K线时间
+        "bars_count": data_summary.get("bars_count", 0)
     }
     
     # 构建当日统计

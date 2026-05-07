@@ -12,6 +12,7 @@ import csv
 import shutil
 from datetime import datetime
 from collections import deque
+import threading
 from typing import Optional, Dict, Any, List
 
 from config import CONFIG, DATA_DIR
@@ -25,6 +26,8 @@ class TraderDataManager:
     
     def __init__(self):
         """初始化数据管理器"""
+        
+        self._file_lock = threading.Lock()
         
         # 确保目录存在
         os.makedirs(os.path.dirname(CONFIG["csv_file"]), exist_ok=True)
@@ -96,18 +99,19 @@ class TraderDataManager:
     
     # ================== 状态文件操作 ==================
     def save_state(self, state_data: Dict[str, Any]) -> bool:
-        """原子方式保存状态文件"""
-        temp_path = f"{CONFIG['state_file']}.tmp"
-        try:
-            with open(temp_path, 'w') as f:
-                json.dump(state_data, f, indent=2)
-            shutil.move(temp_path, CONFIG["state_file"])
-            return True
-        except Exception as e:
-            logger.error(f"保存状态文件失败: {e}")
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            return False
+         # 使用 with 语句自动处理异常释放，且保证串行执行
+        with self._file_lock:
+            temp_path = f"{CONFIG['state_file']}.tmp"
+            try:
+                with open(temp_path, 'w') as f:
+                    json.dump(state_data, f, indent=2)
+                shutil.move(temp_path, CONFIG["state_file"])
+                return True
+            except Exception as e:
+                logger.error(f"保存状态文件失败: {e}")
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return False
         
     
     def load_state(self) -> Optional[Dict[str, Any]]:
