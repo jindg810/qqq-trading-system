@@ -160,14 +160,6 @@ class QQQTrader:
             if self.strategy.position: self._save_state()
 
     # ================= 行情回调 =================
-    def is_trading_hours(self):
-        now = datetime.now(CONFIG["tz_et"])
-        if now.weekday() >= 5: return False
-
-        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-        return market_open <= now <= market_close
-    
     def on_candlestick(self, symbol: str, event: PushCandlestick):
         try:
             # 只处理已收盘的 K 线，避免未完成 K 线的价格波动导致误判
@@ -198,7 +190,9 @@ class QQQTrader:
             self.data_manager.write_kline_to_csv(bar)
             
             # 3. 盘前/盘后静默
-            if not self.is_trading_hours(): return
+            #if not (datetime(2000,1,1,9,30).time() <= bar["ts"].time() <= datetime(2000,1,1,16,0).time()):
+             #   return
+            if not self.is_trading_hours(bar["ts"]): return
 
             # 4. 风控检查：日亏损限额 & 连续止损次数
             if not self.strategy.check_risk(): return
