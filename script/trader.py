@@ -9,6 +9,7 @@ QQQ 0DTE 实盘交易引擎 v6.1 (重构版)
 ✅ 修复 entry_opt 价格抓取 (sleep(1) + 防零值)
 ✅ 盘前/盘后静默 + 乱序K线拦截 + 原子状态保存
 """
+import asyncio
 import os
 import sys
 import threading
@@ -22,8 +23,8 @@ from logger import get_logger
 from trader_data import TraderDataManager
 from config import CONFIG, DATA_DIR
 from longbridge.openapi import (
-    Config, QuoteContext, TradeContext, Order, OrderSide, OrderType,
-    OrderStatus, TimeInForceType, SubType
+    AsyncQuoteContext, Config, Period, PushCandlestick, QuoteContext, TradeContext, Order, OrderSide, OrderType,
+    OrderStatus, TimeInForceType, SubType, TradeSessions
 )
 
 load_dotenv()
@@ -344,8 +345,11 @@ class QQQTrader:
         drop_thresh = CONFIG.get("reversal_drop", 0.002)
         body_thresh = CONFIG.get("min_body_pct", 0.0003)
         
-        highs = [b["high"] for b in self.bars[-20:]]
-        lows = [b["low"] for b in self.bars[-20:]]
+        # ✅ 修复：deque 不支持切片，先转为 list
+        bars_list = list(self.bars)
+        highs = [b["high"] for b in bars_list[-20:]]
+        lows = [b["low"] for b in bars_list[-20:]]
+        
         last = self.bars[-1]
         body = abs(last["close"] - last["open"]) / last["close"]
         if body < body_thresh: return None
@@ -359,51 +363,56 @@ class QQQTrader:
         return None
 
     # ================= 核心行情回调 =================
-    def on_quote(self, ctx, quote):
+    def on_candlestick(self, symbol: str, event: PushCandlestick):
         try:
-            print(f"收到行情: {quote.symbol} @ {getattr(quote, 'last_done', 'N/A')}")
-            if not self.is_trading_hours(): return
-            # ✅ 修复: SDK 结构为 quote.candlesticks -> .candlestick 子对象
-            if not hasattr(quote, "candlesticks") or not quote.candlesticks: return
+            if not hasattr(event, "candlestick"): return
             
-            for cs in quote.candlesticks:
-                # 只处理已收盘的 K 线，避免未完成 K 线的价格波动导致误判
-                if not getattr(cs, "is_confirmed", False): continue
-                
-                c_data = getattr(cs, "candlestick", cs)
-                bar = {
-                    "open": float(c_data.open), "high": float(c_data.high),
-                    "low": float(c_data.low), "close": float(c_data.close),
-                    "volume": float(getattr(c_data, "volume", 0)),
-                    "ts": getattr(c_data, "timestamp", None)
-                }
-                
-                # 乱序拦截
-                if self.last_bar_timestamp and bar["ts"]:
-                    if bar["ts"] <= self.last_bar_timestamp: continue
-                self.last_bar_timestamp = bar["ts"]
-                
-                # 写入缓冲与CSV
-                self.bars.append(bar)
-                self.sma20_vol.append(bar["volume"])
-                self.data_manager.write_kline_to_csv(bar)
-                
-                if not self.check_risk_controls(): continue
-                
-                total_limit = CONFIG.get("breakout_max", 8) + CONFIG.get("reversal_max", 1)
-                if self.trades_today >= total_limit:
-                    self.manage_position()
-                    continue
-                    
-                if not self.position:
-                    sig = self.breakout_signal() or self.reversal_signal()
-                    if sig and self.trades_today < CONFIG.get("breakout_max", 8):
-                        self.open_position(sig, bar["close"])
-                else:
-                    self.manage_position()
-                    
-            # 归档检查 (仅在收盘后触发)
-            self.data_manager.archive_csv()
+            # 只处理已收盘的 K 线，避免未完成 K 线的价格波动导致误判
+            if not getattr(event, "is_confirmed", False): return
+            
+            # K线处理&记录
+            cs = event.candlestick 
+            print(f"收到行情: {cs} ")
+            bar = {
+                "open": float(cs.open), 
+                "high": float(cs.high),
+                "low": float(cs.low), 
+                "close": float(cs.close),
+                "volume": float(getattr(cs, "volume", 0)),
+                "ts": getattr(cs, "timestamp", None)
+            }
+            
+            # K线乱序拦截
+            if self.last_bar_timestamp and bar["ts"] <= self.last_bar_timestamp:
+                return
+        
+            self.last_bar_timestamp = bar["ts"]
+            self.bars.append(bar)
+            self.sma20_vol.append(bar["volume"])
+            self.data_manager.write_kline_to_csv(bar)
+
+            # K线归档检查 (仅在收盘后触发)
+            if not self.is_trading_hours(): 
+                self.data_manager.archive_csv()
+                return
+
+            # 风控检查: 日亏损熔断 & 连续止损熔断
+            if not self.check_risk_controls(): return
+            
+            # 交易频次控制: 每日最多开仓次数（突破+反转总和）达到上限后，只做持仓管理，不再开新仓
+            total_limit = CONFIG.get("breakout_max", 8) + CONFIG.get("reversal_max", 1)
+            if self.trades_today >= total_limit:
+                self.manage_position()
+                return
+            
+            # 开仓条件检测与执行
+            if not self.position:
+                sig = self.breakout_signal() or self.reversal_signal()
+                if sig and self.trades_today < CONFIG.get("breakout_max", 8):
+                    self.open_position(sig, bar["close"])
+            else:
+                self.manage_position()
+            
             self.save_state()
             
         except Exception as e:
@@ -416,10 +425,11 @@ class QQQTrader:
         retry, max_retries = 0, 5
         while retry < max_retries:
             try:
-                self.qc.set_on_quote(self.on_quote)
-                self.qc.subscribe([CONFIG["symbol"]], [SubType.Quote])
+                self.qc.set_on_candlestick(self.on_candlestick)
+                #self.qc.subscribe_candlesticks("700.HK", Period.Min_1, TradeSessions.Intraday)
+                self.qc.subscribe_candlesticks(CONFIG["symbol"], Period.Min_1, TradeSessions.Intraday)
+                
                 logger.info(f"✅ 已订阅 {CONFIG['symbol']} 1分钟K线行情")
-                import threading
                 threading.Event().wait()
             except KeyboardInterrupt:
                 logger.info("🛑 收到停止信号")
@@ -443,9 +453,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
         '''
-加一个 K 线到达时间戳校验（防乱序）​
 ✅ 加一个 断线自动重连 + 补 K 线机制
-✅ 增加 K 线乱序校验
 ✅ 增加 断线自动重连
 ✅ 增加 盘前/盘后静默模式
 改成 按日期自动分文件
