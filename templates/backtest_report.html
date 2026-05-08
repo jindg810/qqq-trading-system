@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QQQ 0DTE v6.1 回测报告</title>
+    <style>
+        :root { --bg: #0f172a; --card: #1e293b; --text: #e2e8f0; --accent: #38bdf8; --win: #22c55e; --loss: #ef4444; }
+        body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; margin: 0; padding: 2rem; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: var(--accent); border-bottom: 2px solid var(--card); padding-bottom: 0.5rem; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin: 2rem 0; }
+        .card { background: var(--card); padding: 1.5rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .metric { font-size: 1.8rem; font-weight: bold; margin: 0.5rem 0; }
+        .win { color: var(--win); } .loss { color: var(--loss); }
+        table { width: 100%; border-collapse: collapse; margin-top: 2rem; background: var(--card); }
+        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #334155; }
+        th { background: #0f172a; color: var(--accent); }
+        .badge { padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.85rem; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>📊 QQQ 0DTE v6.1 回测报告</h1>
+    
+    <div class="grid">
+        <div class="card"><h3>总交易数</h3><div class="metric">{{ metrics.total_trades }} 笔</div></div>
+        <div class="card"><h3>胜率</h3><div class="metric {% if metrics.win_rate >= 0.6 %}win{% else %}loss{% endif %}">{{ "%.1f"|format(metrics.win_rate*100) }}%</div></div>
+        <div class="card"><h3>总收益率</h3><div class="metric {% if metrics.total_return >= 0 %}win{% else %}loss{% endif %}">{{ "%.2f"|format(metrics.total_return) }}%</div></div>
+        <div class="card"><h3>盈亏比 (PF)</h3><div class="metric">{{ "%.2f"|format(metrics.profit_factor) }}</div></div>
+    </div>
+
+    <div class="grid">
+        <div class="card"><h3>平均盈利/亏损</h3><div class="metric">+{{ "%.2f"|format(metrics.avg_win_pct) }}% / {{ "%.2f"|format(metrics.avg_loss_pct) }}%</div></div>
+        <div class="card"><h3>最大连续亏损</h3><div class="metric loss">{{ metrics.max_cons_losses }} 次</div></div>
+        <div class="card"><h3>平均持仓</h3><div class="metric">{{ "%.1f"|format(metrics.avg_bars) }} 根K线</div></div>
+        <div class="card"><h3>退出分布</h3><ul>{% for k,v in metrics.exit_dist.items() %}<li>{{ k }}: {{ "%.1f"|format(v*100) }}%</li>{% endfor %}</ul></div>
+    </div>
+
+    <h2>📜 交易明细 (前 20 笔)</h2>
+    <table>
+        <thead><tr><th>入场时间</th><th>方向</th><th>入场价</th><th>出场价</th><th>盈亏%</th><th>退出原因</th></tr></thead>
+        <tbody>
+            {% for t in trades[:20] %}
+            <tr>
+                <td>{{ t.entry_ts.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td><span class="badge" style="background:{{ '#0ea5e9' if t.side=='call' else '#8b5cf6' }}">{{ t.side.upper() }}</span></td>
+                <td>${{ "%.4f"|format(t.entry_opt) }}</td>
+                <td>${{ "%.4f"|format(t.exit_opt) }}</td>
+                <td class="{{ 'win' if t.pnl>0 else 'loss' }}">{{ "%.2f"|format(t.pnl_pct*100) }}%</td>
+                <td>{{ t.exit_reason }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+</body>
+</html>
