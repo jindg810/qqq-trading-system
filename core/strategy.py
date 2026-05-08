@@ -63,19 +63,14 @@ class QQQStrategy:
         return True
     
     # ================= 信号检测 =================
-    def is_trading_hours(self):
-        now = datetime.now(CONFIG["tz_et"])
-        if now.weekday() >= 5: return False
-
-        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-        return market_open <= now <= market_close
-    
     def generate_signal(self) -> Optional[str]:
         if len(self.bars) < 2: return None
         
-        # 交易窗口过滤 (09:30 - 15:50 ET)
-        if not self.is_trading_hours(): return None
+        # 取K线时间适用回测，交易窗口过滤 (09:30 - 15:50 ET)
+        ts = self.bars[-1]["ts"]
+        mins = ts.hour * 60 + ts.minute
+        if not (9 * 60 + 30 <= mins <= 16 * 60 - 10):
+            return None
 
         # 双信号引擎
         if sig := self._breakout_signal(): return sig
