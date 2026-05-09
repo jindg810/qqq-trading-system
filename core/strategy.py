@@ -42,6 +42,7 @@ class QQQStrategy:
         """注入新K线并更新缓冲（含时间戳防乱序校验）"""
         current_ts = bar.get("ts")
         if self.last_bar_ts and current_ts and current_ts <= self.last_bar_ts:
+            logger.warning(f"⏰ 乱序或重复K线被丢弃: {current_ts} <= {self.last_bar_ts}")
             return False  # 乱序/重复K线拦截
         
         self.last_bar_ts = current_ts
@@ -66,7 +67,9 @@ class QQQStrategy:
     def is_trading_hours(self, raw_ts: Optional[str] = None) -> bool: 
         if raw_ts is None:
             bar_ts = datetime.now(CONFIG["tz_et"])
-        else:
+        elif isinstance(raw_ts, datetime):
+            bar_ts = raw_ts.astimezone(CONFIG["tz_et"]) if raw_ts.tzinfo else raw_ts.replace(tzinfo=CONFIG["tz_et"])
+        else:  # 假设是 ISO 格式字符串
             bar_ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(CONFIG["tz_et"])
         # now = ds if ds is not None else datetime.now(CONFIG["tz_et"])
         if bar_ts.weekday() >= 5: return False
@@ -233,4 +236,5 @@ class QQQStrategy:
 if __name__ == "__main__":
     # 简单测试
     strategy = QQQStrategy()
-    print(strategy.is_trading_hours("2026-05-07T13:29:35Z"))
+    print(strategy.is_trading_hours("2026-05-08T14:04:00Z"))
+    

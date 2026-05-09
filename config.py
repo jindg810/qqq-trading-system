@@ -10,8 +10,8 @@ from zoneinfo import ZoneInfo
 
 # ===================== 目录配置 =====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "../data")
-LOGS_DIR = os.path.join(BASE_DIR, "../logs")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+LOGS_DIR = os.path.join(BASE_DIR, "logs")
 
 # 自动创建目录
 os.makedirs(DATA_DIR, exist_ok=True)

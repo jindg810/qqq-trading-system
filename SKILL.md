@@ -308,7 +308,7 @@ if opt_q and opt_q[0].last_done > 0:
 
 ## 6. 修改清单
 
-每次改 `live_trader.py` 后，检查 `trader_web.py` 是否同步：
+每次改 `trader.py` 后，检查 `trader_web.py` 是否同步：
 
 | # | 检查项 |
 |---|--------|

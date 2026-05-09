@@ -1,0 +1,34 @@
+# .pre-commit-config.yaml
+# git commit -m "hotfix: 紧急修复订单超时" --no-verify
+repos:
+  # 基础代码规范检查
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace          # 清除行尾空格
+      - id: end-of-file-fixer            # 确保文件末尾有空行
+      - id: check-yaml                   # 校验 YAML 格式
+      - id: check-toml                   # 校验 TOML 格式
+      - id: debug-statements             # 拦截遗留的 debugger/print
+      - id: check-added-large-files      # 防止提交大文件（>500KB）
+
+  # Python 现代化 lint + format（替代 flake8/black/isort）
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.1
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        types_or: [python, pyi]
+      - id: ruff-format
+        types_or: [python, pyi]
+
+  # 本地单元测试拦截（核心）
+  - repo: local
+    hooks:
+      - id: pytest
+        name: 🧪 Run Unit Tests
+        entry: pytest tests/ -v --tb=short
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [commit]

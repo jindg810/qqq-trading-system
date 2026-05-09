@@ -179,20 +179,19 @@ class QQQTrader:
             
             # 1. 注入策略缓冲
             if not self.strategy.add_bar(bar): return
-            
+
             # 2. 每日重置与CSV归档
             bar_date = bar["ts"].date()
             if self._current_date != bar_date:
                 self.strategy.reset_daily()
                 self._current_date = bar_date
                 self.data_manager.archive_csv()
-                
             self.data_manager.write_kline_to_csv(bar)
-            
+
             # 3. 盘前/盘后静默
             #if not (datetime(2000,1,1,9,30).time() <= bar["ts"].time() <= datetime(2000,1,1,16,0).time()):
              #   return
-            if not self.is_trading_hours(bar["ts"]): return
+            if not self.strategy.is_trading_hours(bar["ts"]): return
 
             # 4. 风控检查：日亏损限额 & 连续止损次数
             if not self.strategy.check_risk(): return
@@ -253,10 +252,19 @@ class QQQTrader:
                 if self.strategy.position: self._execute_close("FORCE_CLOSE")
                 self._save_state()
                 logger.info("🛑 交易引擎已安全停止")
+    
+    def aaa(self):
+        
+        s = self.strategy.generate_option_symbol(707, "call")
+        print("测试生成期权代码和查询报价,生成的代码:", s)
+        opt_q = self.qc.quote([s])
+        print(f"查询结果: {s}, {opt_q}")
 
 if __name__ == "__main__":
     try:
+        
         trader = QQQTrader()
+        trader.aaa()
         trader.start()
     except Exception as e:
         logger.critical(f"💥 致命错误: {e}")

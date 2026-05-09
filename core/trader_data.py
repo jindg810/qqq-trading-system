@@ -10,10 +10,12 @@ import csv
 import json
 import os
 import shutil
+import sys
 import threading
 from datetime import datetime
 from typing import Any
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config import CONFIG, DATA_DIR
 from logger import get_logger
 
@@ -51,6 +53,7 @@ class TraderDataManager:
     def write_kline_to_csv(self, bar: dict[str, Any]) -> None:
         """写入K线到当日CSV"""
         try:
+            # logger.debug(f"写入K线到CSV:{self.get_today_csv()}")
             with open(self.get_today_csv(), "a", newline="") as f:
                 csv.writer(f).writerow(
                     [
