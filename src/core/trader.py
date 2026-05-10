@@ -4,7 +4,6 @@ QQQ 0DTE 实盘交易引擎 v6.2 (策略分离版)
 ✅ 仅负责：长桥API交互 / 订单执行 / 状态持久化 / CSV归档 / 异常重试
 ✅ 策略逻辑 100% 委托至 core.strategy
 """
-import os
 import sys
 import time
 import threading
@@ -13,12 +12,10 @@ from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
 
-# 路径设置
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config import CONFIG
-from logger import get_logger
-from trader_data import TraderDataManager
-from core.strategy import QQQStrategy
+from src.config import CONFIG
+from src.logger import get_logger
+from tmp.script.trader_data import TraderDataManager
+from src.core.strategy import QQQStrategy
 from longbridge.openapi import (
     Config, Period, PushCandlestick, QuoteContext, TradeContext, 
     Order, OrderSide, OrderType, OrderStatus, TimeInForceType, TradeSessions
@@ -111,12 +108,12 @@ class QQQTrader:
                 symbol=symbol,
                 quantity=CONFIG["max_position_size"],
                 side=OrderSide.Buy,
-                type=OrderType.Market,
+                order_type=OrderType.MO,
                 time_in_force=TimeInForceType.Day
             )
-            order_id = self.tc.submit(order)
+            order_id = self.tc.submit_order(order)
             if not order_id:
-                print(f"订单提交失败: symbol:{symbol}, side:{side}, price:{price}.")
+                print(f"订单提交失败: symbol:{symbol}, side:{side}, price:{stock_price}.")
                 return False
             
             fill_price = self._wait_for_order_fill(order_id)
@@ -145,10 +142,10 @@ class QQQTrader:
                 symbol=symbol,
                 quantity=CONFIG["max_position_size"],
                 side=OrderSide.Sell,
-                type=OrderType.Market,
+                order_type=OrderType.MO,
                 time_in_force=TimeInForceType.Day,
             )
-            order_id = self.tc.submit(order)
+            order_id = self.tc.submit_order(order)
             fill_price = self._wait_for_order_fill(order_id)
             if fill_price:
                 trade = self.strategy.close_position(fill_price)
@@ -181,7 +178,7 @@ class QQQTrader:
             if not self.strategy.add_bar(bar): return
 
             # 2. 每日重置与CSV归档
-            bar_date = bar["ts"].date()
+            bar_date = bar["ts"].date() if isinstance(bar["ts"], datetime) else datetime.strptime(bar["ts"], "%Y-%m-%dT%H:%M:%SZ").date()
             if self._current_date != bar_date:
                 self.strategy.reset_daily()
                 self._current_date = bar_date

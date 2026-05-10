@@ -14,8 +14,8 @@ from typing import List, Dict, Any
 # 确保项目根目录在路径中
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.strategy import QQQStrategy
-from config import CONFIG
+from src.core.strategy import QQQStrategy
+from src.config import CONFIG
 
 logger = logging.getLogger("backtest.engine")
 

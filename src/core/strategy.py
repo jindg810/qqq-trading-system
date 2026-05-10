@@ -4,16 +4,12 @@ QQQ 0DTE 核心策略模块
 ✅ 纯数学/状态逻辑，不依赖长桥 SDK / 文件系统 / 网络
 ✅ 实盘与回测 100% 共用，修改一处全局生效
 """
-import os
-import sys
-# 确保能正确导入根目录的 config 和 logger
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from collections import deque
 from typing import Optional, Dict, Any
 from datetime import datetime
-from config import CONFIG
-from logger import get_logger
+from src.config import CONFIG
+from src.logger import get_logger
 
 logger = get_logger("core.strategy")
 
@@ -64,15 +60,18 @@ class QQQStrategy:
         return True
     
     # ================= 信号检测 =================
-    def is_trading_hours(self, raw_ts: Optional[str] = None) -> bool: 
+    def is_trading_hours(self, raw_ts: Optional[datetime] = None) -> bool: 
         if raw_ts is None:
             bar_ts = datetime.now(CONFIG["tz_et"])
+        elif isinstance(raw_ts, (int, float)):
+            # Unix timestamp（int / float）
+            bar_ts = datetime.fromtimestamp(raw_ts, tz=CONFIG["tz_et"])
         elif isinstance(raw_ts, datetime):
+            # Unix timestamp（int / float）
             bar_ts = raw_ts.astimezone(CONFIG["tz_et"]) if raw_ts.tzinfo else raw_ts.replace(tzinfo=CONFIG["tz_et"])
-        else:  # 假设是 ISO 格式字符串
+        else:
             bar_ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(CONFIG["tz_et"])
-        # now = ds if ds is not None else datetime.now(CONFIG["tz_et"])
-        if bar_ts.weekday() >= 5: return False
+            if bar_ts.weekday() >= 5: return False
 
         market_open = bar_ts.replace(hour=9, minute=30, second=0, microsecond=0)
         market_close = bar_ts.replace(hour=16, minute=0, second=0, microsecond=0)
@@ -237,4 +236,10 @@ if __name__ == "__main__":
     # 简单测试
     strategy = QQQStrategy()
     print(strategy.is_trading_hours("2026-05-08T14:04:00Z"))
+    timestamp=datetime(2026, 5, 8, 14, 0, 0)
+    print(strategy.is_trading_hours(timestamp))
+
+    from longbridge.openapi import Order, OrderSide, OrderType, TimeInForceType
+    o = Order(stock_name='QQQ260509C452000.US', quantity=1, side=OrderSide.Buy, order_type=OrderType.MO, time_in_force=TimeInForceType.Day)
+    print('✅ Order 实例化成功:', o.symbol, o.order_type)
     

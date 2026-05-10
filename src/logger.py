@@ -11,7 +11,7 @@ import logging
 import logging.handlers
 import os
 
-from config import CONFIG
+from src.config import CONFIG
 
 
 class Logger:

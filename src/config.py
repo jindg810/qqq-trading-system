@@ -6,12 +6,27 @@ QQQ 交易系统配置文件
 """
 
 import os
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
+def _get_project_root() -> Path:
+    """
+    动态获取项目根目录
+    ✅ 兼容 src/ 布局 / pytest 测试 / 直接运行 / Docker 部署
+    ✅ 自动向上查找 pyproject.toml 或 .env 作为根目录锚点
+    ✅ 兜底策略保证极端环境下不崩溃
+    """
+    c_path = Path(__file__).resolve()
+    for parent in c_path.parents:
+        if (parent / "pyproject.toml").exists() or (parent / ".env").exists():
+            return parent
+    # 兜底：若锚点未找到，默认返回 config.py 的上一级（即项目根）
+    return c_path.parent.parent
+
 # ===================== 目录配置 =====================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-LOGS_DIR = os.path.join(BASE_DIR, "logs")
+BASE_DIR = _get_project_root()
+DATA_DIR = BASE_DIR / "data"
+LOGS_DIR = BASE_DIR / "logs"
 
 # 自动创建目录
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -71,6 +86,7 @@ def get_config():
         **RISK_CONFIG,
         **SYSTEM_CONFIG,
         "environment": ENVIRONMENT,
+        "base_dir": BASE_DIR,
     }
 
     if ENVIRONMENT == "development":

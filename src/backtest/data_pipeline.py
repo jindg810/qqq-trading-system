@@ -9,8 +9,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
-from logger import get_logger
-from config import CONFIG
+from src.logger import get_logger
+from src.config import CONFIG
 
 logger = get_logger("data_pipeline")
 TZ_ET = ZoneInfo("America/New_York")

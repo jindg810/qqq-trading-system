@@ -1,0 +1,12 @@
+[project]
+name = "qqq-trading-system"
+version = "6.2"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+pythonpath = ["src"]  # 🔑 核心：测试时自动将 src 加入 sys.path
+addopts = "-v --tb=short"
+
+# [tool.ruff]
+# src = ["src1", "test1"]

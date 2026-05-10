@@ -15,9 +15,8 @@ import threading
 from datetime import datetime
 from typing import Any
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config import CONFIG, DATA_DIR
-from logger import get_logger
+from src.config import CONFIG, DATA_DIR
+from src.logger import get_logger
 
 # 设置日志
 logger = get_logger(__name__)

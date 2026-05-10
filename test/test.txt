@@ -1,0 +1,14 @@
+pytest test/test_trader.py -v
+pytest test/test_trader.py::TestOrderExecution::test_on_candlestick_skips_unconfirmed -v -s
+pytest test/test_trader.py::TestTraderCallbacks::test_on_candlestick_skips_unconfirmed -v -s
+pytest test/test_trader.py::TestTraderCallbacks::test_on_candlestick_processes_confirmed -v -s
+pytest test/test_trader.py::TestTraderCallbacks::test_on_candlestick_skips_unconfirmed -v -s
+pytest test/test_trader.py::TestTraderCallbacks::test_on_candlestick_respects_risk_fuse -v -s
+pytest test/test_trader.py::TestTraderCallbacks::test_on_candlestick_processes_confirmed -v -s
+
+# 清理缓存后运行单测
+pytest --cache-clear test/test_trader.py::TestOrderExecution::test_execute_open_success -v -s
+
+# 清理python 缓存
+find . -type d -name __pycache__ -exec rm -rf {} +
+find . -type f -name "*.pyc" -delete

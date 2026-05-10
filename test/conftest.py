@@ -1,94 +1,104 @@
+#!/usr/bin/env python3
 """
-pytest 配置文件 - 严格按照上传的 trader_data.py
+pytest 全局配置与共享 Fixtures
+✅ 自动处理项目路径 / 隔离文件系统 / 模拟时间 / 共享测试数据
 """
 import sys
 import os
-from pathlib import Path
-from datetime import datetime, timezone
-from unittest.mock import Mock, patch
-
 import pytest
+from datetime import datetime, timedelta
+from unittest.mock import MagicMock, patch
 
-# 添加项目路径
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "script"))
+# 1. 自动将项目根目录加入 sys.path
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, PROJECT_ROOT)
 
-# ✅ 从 trader_data 导入 TraderDataManager
-from trader_data import TraderDataManager
-from trader import QQQTrader
 
-# ===================== Fixtures =====================
-@pytest.fixture(scope="session")
-def real_config():
-    """使用真实配置（只读）"""
-    from config import CONFIG
-    return CONFIG.copy()
+@pytest.fixture(scope="session", autouse=True)
+def setup_env():
+    """会话级：确保测试环境隔离，不污染真实 data/ 目录"""
+    os.environ["TRADING_ENV"] = "test"
+    yield
 
-@pytest.fixture
-def test_config(tmp_path):
-    """可修改的测试配置"""
-    from config import get_config
-    config = get_config()
-    config.update({
-        "log_file": str(tmp_path / "test.log"),
-        "state_file": str(tmp_path / "state.json"),
-        "csv_file": str(tmp_path / "test.csv"),
-        "records_dir": str(tmp_path / "records"),
-        "environment": "test"
-    })
-    return config
+@pytest.fixture(scope="function")
+def base_time():
+    """固定测试基准时间（美东 09:40，避开静默期）"""
+    return datetime(2026, 5, 8, 9, 40, 0)
 
-@pytest.fixture
+@pytest.fixture(scope="function")
+def make_bar(base_time):
+    """工厂函数：快速生成标准化K线字典"""
+    def _make(offset=0, open=450.0, high=450.5, low=449.5, close=450.2, volume=100000):
+        return {
+            "ts": base_time + timedelta(minutes=offset),
+            "open": open, "high": high, "low": low, "close": close, "volume": volume
+        }
+    return _make
+
+@pytest.fixture(scope="function")
+def strategy():
+    """提供干净的 QQQStrategy 实例，测试后自动清理"""
+    from src.core.strategy import QQQStrategy
+    strat = QQQStrategy()
+    yield strat
+    # Teardown: 清理状态防污染
+    strat.bars.clear()
+    strat.sma20_vol.clear()
+    strat.position = None
+    strat.reset_daily()
+
+@pytest.fixture(scope="function")
 def mock_longbridge():
-    """统一 Mock 长桥 API"""
-    with patch('trader.Config') as mock_config, \
-         patch('trader.QuoteContext') as mock_qc, \
-         patch('trader.TradeContext') as mock_tc, \
-         patch.object(QQQTrader, 'load_state') as mock_load:
+    """Mock 长桥 SDK 上下文，隔离网络与真实账户"""
+    with patch('core.trader.Config') as MockCfg, \
+         patch('core.trader.QuoteContext') as MockQC, \
+         patch('core.trader.TradeContext') as MockTC:
         
-        # 配置 Mock 对象
-        mock_config.from_apikey_env.return_value = Mock()
-        mock_qc.return_value = Mock()
-        mock_tc.return_value = Mock()
-        
-        yield {
-            'config': mock_config,
-            'qc': mock_qc.return_value,
-            'tc': mock_tc.return_value,
-            'load_state': mock_load
-        }
+        MockCfg.from_apikey_env.return_value = MagicMock()
+        mock_tc = MockTC.return_value
+        mock_qc = MockQC.return_value
+        yield mock_tc, mock_qc
 
-@pytest.fixture
-def sample_bars():
-    """生成测试K线数据"""
-    base_time = datetime(2024, 1, 1, 9, 30, tzinfo=timezone.utc)
-    bars = []
+@pytest.fixture(scope="function")
+def mock_data_manager():
+    """Mock 数据管理器，隔离 state.json / today.csv 真实读写"""
+    with patch('core.trader.TraderDataManager') as MockDM:
+        dm = MockDM.return_value
+        dm.load_state.return_value = None
+        dm.save_state.return_value = True
+        dm.init_state_file.return_value = None
+        dm.init_csv.return_value = None
+        yield dm
+
+@pytest.fixture(scope="function")
+def trader(mock_longbridge, mock_data_manager):
+    """
+    提供已初始化、已注入 Mock 的 QQQTrader 实例
+    ✅ 每个用例获得独立干净的状态
+    ✅ 自动绕过风控初始化
+    """
+    mock_tc, mock_qc = mock_longbridge
+    from src.core.trader import QQQTrader
     
-    for i in range(30):
-        bar = {
-            "ts": (base_time.replace(minute=30+i)).isoformat(),
-            "open": 100.0 + i * 0.1,
-            "high": 100.5 + i * 0.1,
-            "low": 99.5 + i * 0.1,
-            "close": 100.2 + i * 0.1,
-            "volume": 1000 + i * 10
-        }
-        bars.append(bar)
+    # 实例化（Mock 已生效，不会真连API）
+    trader_inst = QQQTrader()
+    trader_inst.tc = mock_tc
+    trader_inst.qc = mock_qc
+    trader_inst.data_manager = mock_data_manager
     
-    return bars
+    # 强制重置策略状态
+    trader_inst.strategy.position = None
+    trader_inst.strategy.trades_today = 0
+    trader_inst.strategy.consecutive_losses = 0
+    trader_inst.strategy.daily_pnl = 0.0
+    trader_inst.strategy.emergency_stopped = False
+    
+    yield trader_inst
 
 @pytest.fixture
-def data_manager(sample_bars):
-    """预加载数据的 DataManager - 使用正确的 add_bar 方法"""
-    dm = TraderDataManager()
-    for bar in sample_bars:
-        dm.add_bar(bar)   # ✅ 正确使用 add_bar（不是 add_bar）
-    return dm
+def freeze_trade_time():
+    """上下文管理器：冻结系统时间为美东 10:00（确保在交易窗口内）"""
+    from freezegun import freeze_time
+    with freeze_time("2026-05-08 10:00:00"):
+        yield datetime(2026, 5, 8, 10, 0, 0)
 
-@pytest.fixture
-def trader(mock_longbridge, data_manager, test_config):
-    """创建测试用的 Trader 实例"""
-    with patch('trader.CONFIG', test_config):
-        t = QQQTrader()
-        t.data_manager = data_manager
-        return t
