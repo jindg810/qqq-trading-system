@@ -6,6 +6,7 @@ QQQ 0DTE 核心策略模块
 """
 
 from collections import deque
+from enum import StrEnum
 from typing import Optional, Dict, Any
 from datetime import datetime
 from src.config import CONFIG
@@ -13,6 +14,12 @@ from src.logger import get_logger
 
 logger = get_logger("core.strategy")
 
+class ExitReason(StrEnum):
+    STOP_LOSS = "STOP_LOSS" # 止损
+    TAKE_PROFIT = "TAKE_PROFIT" # 止盈
+    TRAILING_STOP = "TRAILING_STOP" # 移动止损
+    TIMEOUT = "TIMEOUT" # 时间止损（持仓超过预设周期）
+    
 class QQQStrategy:
     def __init__(self):
         # K线与指标缓冲
@@ -185,16 +192,19 @@ class QQQStrategy:
         """检查持仓退出条件，返回退出原因或 None"""
         if not self.position: return None
         entry_opt = self.position["entry_opt"]
-        pnl_pct = (current_opt_price - entry_opt) / entry_opt
-        peak = max(self.position.get("peak_pnl", 0), pnl_pct)
+        pnl_pct = (current_opt_price - entry_opt) / entry_opt # 当前盈亏比
+        peak = max(self.position.get("peak_pnl", 0), pnl_pct) # 最新盈亏比峰值
         self.position["peak_pnl"] = peak
 
-        if pnl_pct <= -CONFIG.get("sl_pct", 0.25): return "STOP_LOSS"
-        if peak >= CONFIG.get("tp_half", 1.0): return "TAKE_PROFIT"
-        if peak > 0 and (peak - pnl_pct) >= CONFIG.get("trail_pct", 0.30): return "TRAILING_STOP"
+        # 止损：亏损达到预设百分比（如25%）立即止损
+        if pnl_pct <= -CONFIG.get("sl_pct", 0.25): return ExitReason.STOP_LOSS
+        # 止盈：盈亏比达到1倍时止盈全部，达到0.5倍时止盈一半（可选）
+        if peak >= CONFIG.get("tp_half", 1.0): return ExitReason.TAKE_PROFIT
+        # 移动止损：盈亏比达到0.3倍时开始移动止损，保护盈利回撤不超过0.3倍
+        if peak > 0 and (peak - pnl_pct) >= CONFIG.get("trail_pct", 0.30): return ExitReason.TRAILING_STOP
         
         self.position["bars_held"] = self.position.get("bars_held", 0) + 1
-        if self.position["bars_held"] >= CONFIG.get("timeout_bars", 15): return "TIMEOUT"
+        if self.position["bars_held"] >= CONFIG.get("timeout_bars", 15): return ExitReason.TIMEOUT
         return None
 
     def open_position(self, side: str, entry_stock: float, entry_opt: float, symbol: str):
@@ -202,7 +212,8 @@ class QQQStrategy:
         self.position = {
             "side": side, "symbol": symbol,
             "entry_stock": entry_stock, "entry_opt": entry_opt,
-            "peak_pnl": 0.0, "bars_held": 0
+            "peak_pnl": 0.0, # 盈亏比峰值（移动止损基准）
+            "bars_held": 0 # 持仓周期计数器（用于时间止损）
         }
         self.trades_today += 1
 

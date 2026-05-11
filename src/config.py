@@ -49,7 +49,7 @@ STRATEGY_CONFIG = {
     "sl_pct": 0.25,  # 止损百分比
     "tp_half": 1.0,  # 盈亏比达到1倍时止盈一半
     "trail_pct": 0.3,  # 盈亏比达到0.3倍时开始移动止损
-    "timeout_bars": 15,
+    "timeout_bars": 15, # 持仓超过15根K线时强制退出
     "offset": 2.0,
 }
 

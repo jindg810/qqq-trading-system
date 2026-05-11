@@ -36,6 +36,20 @@ def make_bar(base_time):
     return _make
 
 @pytest.fixture(scope="function")
+def inject_bars(strategy):
+    """🔑 抽象至 conftest：批量注入平稳K线，跨测试文件复用"""
+    def _inject(count=20, direction="up", base_price=450.0, volume=100000):
+        step = 0.1 if direction == "up" else -0.1
+        for i in range(count):
+            close = base_price + i * step
+            strategy.add_bar({
+                "ts": datetime(2026, 5, 8, 9, 40 + i, 0),
+                "open": close, "high": close + 0.2, "low": close - 0.2,
+                "close": close, "volume": volume
+            })
+    return _inject
+
+@pytest.fixture(scope="function")
 def strategy():
     """提供干净的 QQQStrategy 实例，测试后自动清理"""
     from src.core.strategy import QQQStrategy

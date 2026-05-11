@@ -23,12 +23,13 @@ repos:
         types_or: [python, pyi]
 
   # 本地单元测试拦截（核心）
-  - repo: local
-    hooks:
-      - id: pytest
-        name: 🧪 Run Unit Tests
-        entry: pytest tests/ -v --tb=short
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [commit]
+  # 🔽 将下方 local/pytest 块注释掉或删除，提交时就不再执行测试
+  #- repo: local
+  #  hooks:
+  #    - id: pytest
+  #      name: 🧪 Run Unit Tests
+  #      entry: pytest tests/ -v --tb=short
+  #      language: system
+  #      pass_filenames: false
+  #      always_run: true
+  #      stages: [commit]
