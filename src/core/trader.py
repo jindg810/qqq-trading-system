@@ -12,9 +12,10 @@ from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
 
+from src.message.notifier import Notifier
 from src.config import CONFIG
 from src.logger import get_logger
-from tmp.script.trader_data import TraderDataManager
+from src.core.trader_data import TraderDataManager
 from src.core.strategy import QQQStrategy
 from longbridge.openapi import (
     Config, Period, PushCandlestick, QuoteContext, TradeContext, 
@@ -127,6 +128,7 @@ class QQQTrader:
                 
             self.strategy.open_position(side, stock_price, fill_price, symbol)
             self._save_state()
+            Notifier().notify_open(symbol, fill_price, side) 
             logger.info(f"✅ 开仓成功: {symbol} @ {fill_price:.2f}")
             return True
         except Exception as e:
@@ -149,6 +151,7 @@ class QQQTrader:
             fill_price = self._wait_for_order_fill(order_id)
             if fill_price:
                 trade = self.strategy.close_position(fill_price)
+                Notifier().notify_close(symbol, fill_price, trade["pnl"], exit_reason)
                 logger.info(f"✅ 平仓成功 @ {fill_price:.2f} | 盈亏: {trade['pnl']:+.2f}")
             self._save_state()
         except Exception as e:
@@ -191,7 +194,11 @@ class QQQTrader:
             if not self.strategy.is_trading_hours(bar["ts"]): return
 
             # 4. 风控检查：日亏损限额 & 连续止损次数
-            if not self.strategy.check_risk(): return
+            # if not self.strategy.check_risk(): return
+            if not self.strategy.check_risk():
+                reason = "日亏损熔断" if self.strategy.daily_pnl <= CONFIG["max_daily_loss"] else "连续止损熔断"
+                Notifier().notify_risk_fuse(reason, f"账户状态: 连亏 {self.strategy.consecutive_losses} 次 | 日盈亏 {self.strategy.daily_pnl}")
+                return
             
             # 5. 交易频次控制
             total_limit = CONFIG.get("breakout_max", 8) + CONFIG.get("reversal_max", 1)
@@ -202,6 +209,7 @@ class QQQTrader:
             # 6. 信号与持仓管理
             if not self.strategy.position:
                 sig = self.strategy.generate_signal()
+                if sig: Notifier().notify_signal(sig, bar["close"], reason="突破/反转触发")
                 if sig and self.strategy.trades_today < CONFIG.get("breakout_max", 8):
                     self._execute_open(sig, bar["close"])
             else:
@@ -259,7 +267,7 @@ class QQQTrader:
 
 if __name__ == "__main__":
     try:
-        
+        # Notifier().send('🧪 测试', '钉钉 Webhook 配置成功')
         trader = QQQTrader()
         trader.aaa()
         trader.start()

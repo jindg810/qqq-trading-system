@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from dotenv import load_dotenv
+
 def _get_project_root() -> Path:
     """
     动态获取项目根目录
@@ -32,6 +34,9 @@ LOGS_DIR = BASE_DIR / "logs"
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 os.makedirs(os.path.join(DATA_DIR, "records"), exist_ok=True)
+
+# ===================== 加载环境变量 =====================
+load_dotenv()
 
 # ===================== 基础配置 =====================
 SYMBOL = "QQQ.US"
@@ -143,6 +148,13 @@ def validate_config(config):
 
 # ===================== 导出配置 =====================
 CONFIG = get_config()
+
+# 通知相关配置
+CONFIG.update({
+    "enable_notifications": os.getenv("ENABLE_NOTIFICATIONS", "true").lower() == "true",
+    "dingtalk_webhook": os.getenv("DINGTALK_WEBHOOK", "").strip(),
+    "dingtalk_secret": os.getenv("DINGTALK_SECRET"),
+})
 
 # 验证配置
 validation_errors = validate_config(CONFIG)
