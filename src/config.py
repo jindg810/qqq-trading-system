@@ -84,6 +84,7 @@ ENVIRONMENT = os.getenv("TRADING_ENV", "production")
 # ===================== 完整配置合并 =====================
 def get_config():
     config = {
+        "auto_trade_on": os.getenv("AUTO_TRADE_ON", "false").lower() == "true",
         "symbol": SYMBOL,
         "timezone": TIMEZONE,
         "tz_et": TZ_ET,

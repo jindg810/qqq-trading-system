@@ -5,6 +5,7 @@ core/trader.py 单元测试
 """
 from unittest.mock import patch, MagicMock
 from longbridge.openapi import OrderStatus
+import pytest
 
 class TestOrderExecution:
     @patch('core.trader.time.sleep')
@@ -33,8 +34,7 @@ class TestOrderExecution:
         assert price is None
         trader.tc.cancel_order.assert_called_once_with("ORD_002")
     
-    '''
-    @TODO: order create faiure
+    @pytest.mark.skip(reason="⏸️ 临时跳过：等待Order冲突解决")
     @patch('core.trader.time.sleep')
     def test_execute_open_success(self, mock_sleep, trader, freeze_trade_time):
          # ✅ 核心修复：直接配置 trader.tc / trader.qc（与 trader.py 内部 self.tc/self.qc 完全一致）
@@ -65,6 +65,7 @@ class TestOrderExecution:
         trader.qc.quote.assert_called_once()
         trader.data_manager.save_state.assert_called()
 
+    @pytest.mark.skip(reason="⏸️ 临时跳过：等待Order冲突解决")
     def test_execute_close_success(self, trader, freeze_trade_time):
         trader.strategy.open_position("call", 450.0, 1.0, "TEST")
         trader.tc.submit.return_value = "ORD_CLOSE"
@@ -75,7 +76,6 @@ class TestOrderExecution:
         assert trader.strategy.position is None
         trader.tc.submit.assert_called_once()
         trader.data_manager.save_state.assert_called()
-    '''
 
 class TestTraderCallbacks:
     def test_on_candlestick_skips_unconfirmed(self, trader):

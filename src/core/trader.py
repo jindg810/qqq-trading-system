@@ -103,7 +103,11 @@ class QQQTrader:
             if symbol is None:
                 logger.error(f"尝试失败，无法生成期权合约代码: price={stock_price}, side={side}")
                 return False
-        
+
+            if not CONFIG.get("auto_trade_on", False):
+                logger.info(f"💧 自动交易关闭中。开仓参数: {symbol} @ {stock_price:.2f} | side: {side}")
+                return False
+            
             logger.info(f"📈 尝试开仓: {symbol}")
             order = Order(
                 symbol=symbol,
