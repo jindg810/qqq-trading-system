@@ -3,15 +3,12 @@
 pytest 全局配置与共享 Fixtures
 ✅ 自动处理项目路径 / 隔离文件系统 / 模拟时间 / 共享测试数据
 """
+
 import sys
 import os
 import pytest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
-
-# 1. 自动将项目根目录加入 sys.path
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, PROJECT_ROOT)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -20,39 +17,57 @@ def setup_env():
     os.environ["TRADING_ENV"] = "test"
     yield
 
+
 @pytest.fixture(scope="function")
 def base_time():
     """固定测试基准时间（美东 09:40，避开静默期）"""
     return datetime(2026, 5, 8, 9, 40, 0)
 
+
 @pytest.fixture(scope="function")
 def make_bar(base_time):
     """工厂函数：快速生成标准化K线字典"""
+
     def _make(offset=0, open=450.0, high=450.5, low=449.5, close=450.2, volume=100000):
         return {
             "ts": base_time + timedelta(minutes=offset),
-            "open": open, "high": high, "low": low, "close": close, "volume": volume
+            "open": open,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
         }
+
     return _make
+
 
 @pytest.fixture(scope="function")
 def inject_bars(strategy):
     """🔑 抽象至 conftest：批量注入平稳K线，跨测试文件复用"""
+
     def _inject(count=20, direction="up", base_price=450.0, volume=100000):
         step = 0.1 if direction == "up" else -0.1
         for i in range(count):
             close = base_price + i * step
-            strategy.add_bar({
-                "ts": datetime(2026, 5, 8, 9, 40 + i, 0),
-                "open": close, "high": close + 0.2, "low": close - 0.2,
-                "close": close, "volume": volume
-            })
+            strategy.add_bar(
+                {
+                    "ts": datetime(2026, 5, 8, 9, 40 + i, 0),
+                    "open": close,
+                    "high": close + 0.2,
+                    "low": close - 0.2,
+                    "close": close,
+                    "volume": volume,
+                }
+            )
+
     return _inject
+
 
 @pytest.fixture(scope="function")
 def strategy():
     """提供干净的 QQQStrategy 实例，测试后自动清理"""
     from src.core.strategy import QQQStrategy
+
     strat = QQQStrategy()
     yield strat
     # Teardown: 清理状态防污染
@@ -61,28 +76,30 @@ def strategy():
     strat.position = None
     strat.reset_daily()
 
+
 @pytest.fixture(scope="function")
 def mock_longbridge():
     """Mock 长桥 SDK 上下文，隔离网络与真实账户"""
-    with patch('core.trader.Config') as MockCfg, \
-         patch('core.trader.QuoteContext') as MockQC, \
-         patch('core.trader.TradeContext') as MockTC:
-        
+    with patch("core.trader.Config") as MockCfg, patch(
+        "core.trader.QuoteContext"
+    ) as MockQC, patch("core.trader.TradeContext") as MockTC:
         MockCfg.from_apikey_env.return_value = MagicMock()
         mock_tc = MockTC.return_value
         mock_qc = MockQC.return_value
         yield mock_tc, mock_qc
 
+
 @pytest.fixture(scope="function")
 def mock_data_manager():
     """Mock 数据管理器，隔离 state.json / today.csv 真实读写"""
-    with patch('core.trader.TraderDataManager') as MockDM:
+    with patch("core.trader.TraderDataManager") as MockDM:
         dm = MockDM.return_value
         dm.load_state.return_value = None
         dm.save_state.return_value = True
         dm.init_state_file.return_value = None
         dm.init_csv.return_value = None
         yield dm
+
 
 @pytest.fixture(scope="function")
 def trader(mock_longbridge, mock_data_manager):
@@ -93,26 +110,27 @@ def trader(mock_longbridge, mock_data_manager):
     """
     mock_tc, mock_qc = mock_longbridge
     from src.core.trader import QQQTrader
-    
+
     # 实例化（Mock 已生效，不会真连API）
     trader_inst = QQQTrader()
     trader_inst.tc = mock_tc
     trader_inst.qc = mock_qc
     trader_inst.data_manager = mock_data_manager
-    
+
     # 强制重置策略状态
     trader_inst.strategy.position = None
     trader_inst.strategy.trades_today = 0
     trader_inst.strategy.consecutive_losses = 0
     trader_inst.strategy.daily_pnl = 0.0
     trader_inst.strategy.emergency_stopped = False
-    
+
     yield trader_inst
+
 
 @pytest.fixture
 def freeze_trade_time():
     """上下文管理器：冻结系统时间为美东 10:00（确保在交易窗口内）"""
     from freezegun import freeze_time
+
     with freeze_time("2026-05-08 10:00:00"):
         yield datetime(2026, 5, 8, 10, 0, 0)
-
