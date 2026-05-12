@@ -36,7 +36,7 @@ class BrokerAdapter(ABC):
 
     # 订单相关接口
     @abstractmethod
-    def get_quote(self, symbol: str) -> Optional[Quote]: ...
+    def quote(self, symbol: str) -> Optional[Quote]: ...
     
     # 订单提交接口
     @abstractmethod

@@ -8,7 +8,7 @@ import uuid
 
 class OrderSide(Enum): BUY = "BUY"; SELL = "SELL"
 class OrderType(Enum): MARKET = "MARKET"; LIMIT = "LIMIT"
-class OrderStatu(Enum): 
+class OrderStatus(Enum): 
     PENDING = "PENDING"; FILLED = "FILLED"; PARTIALLY_FILLED = "PARTIALLY_FILLED"
     CANCELLED = "CANCELLED"; REJECTED = "REJECTED"; FAILED = "FAILED"
 class TimeInForce(Enum): DAY = "DAY"; GTC = "GTC"; IOC = "IOC"
@@ -22,7 +22,7 @@ class OrderRequest:
 @dataclass(slots=True)
 class OrderCheck:
     order_id: str; filled_price: Optional[float]
-    filled_qty: int; status: OrderStatu; updated_at: datetime
+    filled_qty: int; status: OrderStatus; updated_at: datetime
 
 @dataclass(slots=True)
 class Quote:

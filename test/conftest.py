@@ -78,16 +78,18 @@ def strategy():
 
 
 @pytest.fixture(scope="function")
-def mock_longbridge():
-    """Mock 长桥 SDK 上下文，隔离网络与真实账户"""
-    with patch("core.trader.Config") as MockCfg, patch(
-        "core.trader.QuoteContext"
-    ) as MockQC, patch("core.trader.TradeContext") as MockTC:
-        MockCfg.from_apikey_env.return_value = MagicMock()
-        mock_tc = MockTC.return_value
-        mock_qc = MockQC.return_value
-        yield mock_tc, mock_qc
-
+def mock_broker():
+    """Mock BrokerAdapter 接口，零 SDK 依赖"""
+    from unittest.mock import MagicMock
+    from src.broker.base import BrokerAdapter
+    mb = MagicMock(spec=BrokerAdapter)
+    mb.connect.return_value = None
+    mb.is_connected.return_value = True
+    mb.submit_order.return_value = "MOCK_ORD_001"
+    mb.check_order.return_value = None  # 默认未成交
+    mb.quote.return_value = None
+    mb.cancel_order.return_value = True
+    yield mb
 
 @pytest.fixture(scope="function")
 def mock_data_manager():
@@ -102,19 +104,16 @@ def mock_data_manager():
 
 
 @pytest.fixture(scope="function")
-def trader(mock_longbridge, mock_data_manager):
+def trader(mock_broker, mock_data_manager):
     """
     提供已初始化、已注入 Mock 的 QQQTrader 实例
     ✅ 每个用例获得独立干净的状态
     ✅ 自动绕过风控初始化
     """
-    mock_tc, mock_qc = mock_longbridge
     from src.core.trader import QQQTrader
 
     # 实例化（Mock 已生效，不会真连API）
-    trader_inst = QQQTrader()
-    trader_inst.tc = mock_tc
-    trader_inst.qc = mock_qc
+    trader_inst = QQQTrader(broker=mock_broker)
     trader_inst.data_manager = mock_data_manager
 
     # 强制重置策略状态
@@ -131,6 +130,5 @@ def trader(mock_longbridge, mock_data_manager):
 def freeze_trade_time():
     """上下文管理器：冻结系统时间为美东 10:00（确保在交易窗口内）"""
     from freezegun import freeze_time
-
     with freeze_time("2026-05-08 10:00:00"):
         yield datetime(2026, 5, 8, 10, 0, 0)

@@ -8,7 +8,7 @@ from longbridge.openapi import AdjustType, Candlestick, Config, QuoteContext, Tr
 from longbridge.openapi import Order as LBOrder, OrderSide as LBSide, OrderType as LBType
 from longbridge.openapi import OrderStatus as LBStatus, TimeInForceType as LBTIF
 from src.broker.base import BrokerAdapter, BrokerError, ConnectionError, OrderError
-from src.broker.models import OrderRequest, OrderCheck, Quote, KlineData, OrderStatu, OrderSide, OrderType, TimeInForce
+from src.broker.models import OrderRequest, OrderCheck, Quote, KlineData, OrderStatus, OrderSide, OrderType, TimeInForce
 from src.config import CONFIG
 
 logger = logging.getLogger("broker.longbridge")
@@ -18,17 +18,17 @@ SIDE_MAP = {OrderSide.BUY: LBSide.Buy, OrderSide.SELL: LBSide.Sell}
 TYPE_MAP = {OrderType.MARKET: LBType.MO, OrderType.LIMIT: LBType.LO}
 TIF_MAP = {TimeInForce.DAY: LBTIF.Day}
 _STATUS_NAME_MAP = {
-    "Filled": OrderStatu.FILLED,
-    "PartialFilled": OrderStatu.PARTIALLY_FILLED,
-    "Canceled": OrderStatu.CANCELLED,
-    "Rejected": OrderStatu.REJECTED,
-    "Expired": OrderStatu.FAILED,
-    "WaitToNew": OrderStatu.PENDING,
-    "New": OrderStatu.PENDING,
-    "WaitToCancel": OrderStatu.PENDING,
-    "PendingCancel": OrderStatu.PENDING,
-    "WaitToReplace": OrderStatu.PENDING,
-    "PendingReplace": OrderStatu.PENDING,
+    "Filled": OrderStatus.FILLED,
+    "PartialFilled": OrderStatus.PARTIALLY_FILLED,
+    "Canceled": OrderStatus.CANCELLED,
+    "Rejected": OrderStatus.REJECTED,
+    "Expired": OrderStatus.FAILED,
+    "WaitToNew": OrderStatus.PENDING,
+    "New": OrderStatus.PENDING,
+    "WaitToCancel": OrderStatus.PENDING,
+    "PendingCancel": OrderStatus.PENDING,
+    "WaitToReplace": OrderStatus.PENDING,
+    "PendingReplace": OrderStatus.PENDING,
 }
 
 class LongbridgeAdapter(BrokerAdapter):
@@ -98,7 +98,7 @@ class LongbridgeAdapter(BrokerAdapter):
         except Exception as e:
             raise BrokerError(f"历史K线数据查询失败: {e}") from e
     
-    def get_quote(self, symbol: str) -> Optional[Quote]:
+    def quote(self, symbol: str) -> Optional[Quote]:
         if not self.qc: raise ConnectionError("未连接")
         try:
             res = self.qc.quote([symbol])
@@ -136,7 +136,7 @@ class LongbridgeAdapter(BrokerAdapter):
             o = orders[0]
             
             status_name = type(o.status).__name__
-            mapped_status = _STATUS_NAME_MAP.get(status_name, OrderStatu.PENDING)
+            mapped_status = _STATUS_NAME_MAP.get(status_name, OrderStatus.PENDING)
             return OrderCheck(
                 order_id=order_id,
                 filled_price=float(o.filled_avg_price) if o.filled_avg_price > 0 else None,

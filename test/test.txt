@@ -12,3 +12,9 @@ pytest --cache-clear test/test_trader.py::TestOrderExecution::test_execute_open_
 # 清理python 缓存
 find . -type d -name __pycache__ -exec rm -rf {} +
 find . -type f -name "*.pyc" -delete
+
+# 3. 运行全量测试， --tb=short 只打印最关键的报错行（测试文件名、行号、具体断言失败位置）
+pytest test/ -v --tb=short 
+
+# 4. 查看覆盖率（推荐）
+pytest test/ --cov=src.core --cov-report=term-missing 

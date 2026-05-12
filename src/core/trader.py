@@ -12,21 +12,23 @@ from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
 
+from src.broker.longbridge import LongbridgeAdapter
 from src.message.notifier import Notifier
 from src.config import CONFIG
 from src.logger import get_logger
 from src.core.trader_data import TraderDataManager
 from src.core.strategy import QQQStrategy
-from longbridge.openapi import (
-    Config, Period, PushCandlestick, QuoteContext, TradeContext, 
-    Order, OrderSide, OrderType, OrderStatus, TimeInForceType, TradeSessions
+from src.broker.base import BrokerAdapter
+from src.broker.models import (
+    OrderRequest, OrderCheck, Quote, KlineData,
+    OrderStatus, OrderSide, OrderType, TimeInForce
 )
 
 load_dotenv()
 logger = get_logger("core.trader")
 
 class QQQTrader:
-    def __init__(self):
+    def __init__(self, broker: BrokerAdapter):
         logger.system("初始化交易引擎 v6.2...")
         self.data_manager = TraderDataManager()
         self.strategy = QQQStrategy()  # 🔑 注入核心策略
@@ -38,16 +40,10 @@ class QQQTrader:
         self.data_manager.init_state_file()
         self.data_manager.init_csv()
         self._load_state()
-        
-        # 长桥上下文
-        try:
-            cfg = Config.from_apikey_env()
-            self.qc = QuoteContext(cfg)
-            self.tc = TradeContext(cfg)
-            logger.info("✅ 长桥 API 初始化成功.")
-        except Exception as e:
-            logger.critical(f"❌ 长桥初始化失败: {e}")
-            raise
+
+        self.broker = broker  # 🔑 依赖注入
+        self.broker.connect() # 🔑 显式接管连接生命周期
+        logger.info("✅ 券商接口连接成功")
 
     def _load_state(self):
         state = self.data_manager.load_state()
@@ -77,14 +73,13 @@ class QQQTrader:
         start = time.time()
         while time.time() - start < timeout:
             try:
-                orders = self.tc.history_orders(order_ids=[order_id])
-                if not orders:
+                order = self.broker.check_order(order_ids=[order_id])
+                if not order:
                     time.sleep(CONFIG.get("order_check_interval", 1))
                     continue
-                order = orders[0]
-                # ✅ 修复：正确访问 order 对象属性
-                if order.filled_quantity > 0 and order.filled_avg_price > 0:
-                    return float(order.filled_avg_price)
+                
+                if order.filled_qty > 0 and order.filled_price > 0:
+                    return float(order.filled_price)
                 if order.status in (OrderStatus.Canceled, OrderStatus.Rejected, OrderStatus.Failed):
                     logger.warning(f"订单 {order_id} 状态: {order.status}，终止轮询")
                     return None
@@ -92,7 +87,7 @@ class QQQTrader:
                 logger.warning(f"查询订单状态失败: {e}")
             time.sleep(CONFIG.get("order_check_interval", 1))
         try: 
-            self.tc.cancel_order(order_id)
+            self.broker.cancel_order(order_id)
             logger.warning(f"⏱️ 订单 {order_id} 超时未成交，已取消")
         except: pass
         return None
@@ -109,14 +104,15 @@ class QQQTrader:
                 return False
             
             logger.info(f"📈 尝试开仓: {symbol}")
-            order = Order(
+            order = OrderRequest(
                 symbol=symbol,
                 quantity=CONFIG["max_position_size"],
                 side=OrderSide.Buy,
                 order_type=OrderType.MO,
-                time_in_force=TimeInForceType.Day
+                time_in_force=TimeInForce.Day
             )
-            order_id = self.tc.submit_order(order)
+            #print(f"提交订单: {order}")
+            order_id = self.broker.submit_order(order)
             if not order_id:
                 print(f"订单提交失败: symbol:{symbol}, side:{side}, price:{stock_price}.")
                 return False
@@ -126,7 +122,7 @@ class QQQTrader:
             
             # 抓取最新报价确认成交价
             time.sleep(1)
-            opt_q = self.qc.quote([symbol])
+            opt_q = self.broker.quote([symbol])
             if opt_q and opt_q[0].last_done > 0:
                 fill_price = float(opt_q[0].last_done)
                 
@@ -144,14 +140,14 @@ class QQQTrader:
         symbol = self.strategy.position["symbol"]
         logger.info(f"📉 尝试平仓 [{exit_reason}]: {symbol}")
         try:
-            order = Order(
+            order = OrderRequest(
                 symbol=symbol,
                 quantity=CONFIG["max_position_size"],
                 side=OrderSide.Sell,
                 order_type=OrderType.MO,
-                time_in_force=TimeInForceType.Day,
+                time_in_force=TimeInForce.Day,
             )
-            order_id = self.tc.submit_order(order)
+            order_id = self.broker.submit_order(order)
             fill_price = self._wait_for_order_fill(order_id)
             if fill_price:
                 trade = self.strategy.close_position(fill_price)
@@ -164,7 +160,7 @@ class QQQTrader:
             if self.strategy.position: self._save_state()
 
     # ================= 行情回调 =================
-    def on_candlestick(self, symbol: str, event: PushCandlestick):
+    def on_candlestick(self, symbol: str, event: KlineData):
         try:
             # 只处理已收盘的 K 线，避免未完成 K 线的价格波动导致误判
             if not hasattr(event, "candlestick") or not getattr(event, "is_confirmed", False):
@@ -231,7 +227,7 @@ class QQQTrader:
         self.last_opt_poll = time.time()
         
         try:
-            opt_q = self.qc.quote([self.strategy.position["symbol"]])
+            opt_q = self.broker.quote([self.strategy.position["symbol"]])
             if opt_q and opt_q[0].last_done > 0:
                 exit_reason = self.strategy.check_position_exit(float(opt_q[0].last_done))
                 if exit_reason:
@@ -245,9 +241,9 @@ class QQQTrader:
         retry, max_retries = 0, 5
         while retry < max_retries:
             try:
-                self.qc.set_on_candlestick(self.on_candlestick)
-                # self.qc.subscribe_candlesticks("700.HK", Period.Min_1, TradeSessions.Intraday)
-                self.qc.subscribe_candlesticks(CONFIG["symbol"], Period.Min_1, TradeSessions.Intraday)
+                self.broker.set_kline_callback(self.on_candlestick)
+                # self.broker.subscribe_klines("700.HK")
+                self.broker.subscribe_klines(CONFIG["symbol"])
                 logger.info(f"✅ 已订阅 {CONFIG['symbol']} 1分钟K线行情")
                 threading.Event().wait()
             except KeyboardInterrupt:
@@ -261,19 +257,10 @@ class QQQTrader:
                 if self.strategy.position: self._execute_close("FORCE_CLOSE")
                 self._save_state()
                 logger.info("🛑 交易引擎已安全停止")
-    
-    def aaa(self):
-        
-        s = self.strategy.generate_option_symbol(707, "call")
-        print("测试生成期权代码和查询报价,生成的代码:", s)
-        opt_q = self.qc.quote([s])
-        print(f"查询结果: {s}, {opt_q}")
 
 if __name__ == "__main__":
     try:
-        # Notifier().send('🧪 测试', '钉钉 Webhook 配置成功')
-        trader = QQQTrader()
-        trader.aaa()
+        trader = QQQTrader(broker=LongbridgeAdapter())
         trader.start()
     except Exception as e:
         logger.critical(f"💥 致命错误: {e}")
