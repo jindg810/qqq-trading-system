@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 
+
 @pytest.fixture(scope="session", autouse=True)
 def setup_env():
     """会话级：确保测试环境隔离，不污染真实 data/ 目录"""
@@ -110,13 +111,17 @@ def trader(mock_broker, mock_data_manager):
     ✅ 每个用例获得独立干净的状态
     ✅ 自动绕过风控初始化
     """
+    from src.config import CONFIG
     from src.core.trader import QQQTrader
+    
+    # 1. 测试环境强制开启自动交易（绕过拦截）
+    CONFIG["auto_trade_on"] = True
 
-    # 实例化（Mock 已生效，不会真连API）
+    # 2. 依赖注入实例化（Mock 已生效，不会真连API）
     trader_inst = QQQTrader(broker=mock_broker)
     trader_inst.data_manager = mock_data_manager
 
-    # 强制重置策略状态
+    # 3.强制重置策略状态
     trader_inst.strategy.position = None
     trader_inst.strategy.trades_today = 0
     trader_inst.strategy.consecutive_losses = 0

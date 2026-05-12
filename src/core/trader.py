@@ -107,14 +107,14 @@ class QQQTrader:
             order = OrderRequest(
                 symbol=symbol,
                 quantity=CONFIG["max_position_size"],
-                side=OrderSide.Buy,
-                order_type=OrderType.MO,
-                time_in_force=TimeInForce.Day
+                side=OrderSide.BUY,
+                type=OrderType.MARKET,
+                time_in_force=TimeInForce.DAY
             )
-            #print(f"提交订单: {order}")
+
             order_id = self.broker.submit_order(order)
             if not order_id:
-                print(f"订单提交失败: symbol:{symbol}, side:{side}, price:{stock_price}.")
+                logger.error(f"订单提交失败: symbol:{symbol}, side:{side}, price:{stock_price}.")
                 return False
             
             fill_price = self._wait_for_order_fill(order_id)
@@ -122,9 +122,9 @@ class QQQTrader:
             
             # 抓取最新报价确认成交价
             time.sleep(1)
-            opt_q = self.broker.quote([symbol])
-            if opt_q and opt_q[0].last_done > 0:
-                fill_price = float(opt_q[0].last_done)
+            quote = self.broker.quote(symbol)
+            if quote and quote.last_price > 0:
+                fill_price = quote.last_price
                 
             self.strategy.open_position(side, stock_price, fill_price, symbol)
             self._save_state()
@@ -227,9 +227,9 @@ class QQQTrader:
         self.last_opt_poll = time.time()
         
         try:
-            opt_q = self.broker.quote([self.strategy.position["symbol"]])
-            if opt_q and opt_q[0].last_done > 0:
-                exit_reason = self.strategy.check_position_exit(float(opt_q[0].last_done))
+            quote = self.broker.quote([self.strategy.position["symbol"]])
+            if quote and quote.last_price > 0:
+                exit_reason = self.strategy.check_position_exit(float(quote.last_price))
                 if exit_reason:
                     self._execute_close(exit_reason)
         except Exception as e:

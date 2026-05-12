@@ -112,12 +112,17 @@ class LongbridgeAdapter(BrokerAdapter):
     def submit_order(self, order: OrderRequest) -> str:
         if not self.tc: raise ConnectionError("未连接")
         try:
-            lb_order = LBOrder(
-                symbol=order.symbol, quantity=order.quantity,
-                side=SIDE_MAP[order.side], type=TYPE_MAP[order.type],
+            if order.type == OrderType.LIMIT and not order.price:
+                raise OrderError("限价单必须指定 price 参数")
+
+            order_id = self.tc.submit_order(
+                symbol=order.symbol, 
+                submitted_quantity=order.quantity,
+                side=SIDE_MAP[order.side], 
+                order_type=TYPE_MAP[order.type],
+                submitted_price=order.price if order.type == OrderType.LIMIT else None,
                 time_in_force=TIF_MAP[order.time_in_force]
             )
-            order_id = self.tc.submit_order(lb_order)
             logger.debug(f"📤 订单提交: {order.client_id} -> {order_id}")
             return order_id
         except Exception as e:

@@ -15,8 +15,12 @@ class TimeInForce(Enum): DAY = "DAY"; GTC = "GTC"; IOC = "IOC"
 
 @dataclass(slots=True)
 class OrderRequest:
-    symbol: str; side: OrderSide; type: OrderType; quantity: int
-    time_in_force: TimeInForce = TimeInForce.DAY
+    symbol: str; 
+    side: OrderSide; 
+    type: OrderType; 
+    quantity: int;
+    time_in_force: TimeInForce = TimeInForce.DAY;
+    price: Optional[float] = None;  # 🔑 新增：限价单必填，市价单为 None
     client_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])  # 🔑 幂等防重单
 
 @dataclass(slots=True)

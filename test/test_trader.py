@@ -33,23 +33,19 @@ class TestOrderExecution:
         assert price is None
         trader.broker.cancel_order.assert_called_once_with("ORD_002")
     
-    @pytest.mark.skip(reason="⏸️ 临时跳过：等待Order冲突解决")
+    #@pytest.mark.skip(reason="⏸️ 临时跳过：等待Order冲突解决")
     @patch('core.trader.time.sleep')
     def test_execute_open_success(self, mock_sleep, trader, freeze_trade_time):
-         # ✅ 核心修复：直接配置 trader.tc / trader.qc（与 trader.py 内部 self.tc/self.qc 完全一致）
         trader.broker.submit_order.return_value = "ORD_123"
-        mock_filled_order = MagicMock()
-        mock_filled_order.filled_quantity = 1
-        mock_filled_order.filled_avg_price = 1.50
-        mock_filled_order.status = OrderStatus.FILLED
-        mock_filled_order.updated_at = freeze_trade_time
-        trader.broker.check_order.return_value = [mock_filled_order]
-
-        mock_quote = MagicMock()
-        mock_quote.last_done = 1.55
-        trader.broker.quote.return_value = [mock_quote]
+        trader.broker.quote.return_value = Quote(symbol="TEST", last_price=1.55)
+        trader.broker.check_order.return_value = OrderCheck(
+            order_id="ORD_123", filled_price=1.50, 
+            filled_qty=1, status=OrderStatus.FILLED, 
+            updated_at=freeze_trade_time
+        )
 
         # ✅ 执行开仓（调用你实际的内部方法）
+        trader.strategy.bars.append({"ts": freeze_trade_time})
         result = trader._execute_open("call", 450.0)
 
         # ✅ 核心断言
@@ -61,7 +57,7 @@ class TestOrderExecution:
 
         # ✅ 验证调用链
         trader.broker.submit_order.assert_called_once()
-        trader.broker.check_order.assert_called_once_with(order_id="ORD_123")
+        trader.broker.check_order.assert_called_once_with(order_ids=["ORD_123"])
         trader.broker.quote.assert_called_once()
         trader.data_manager.save_state.assert_called()
 
