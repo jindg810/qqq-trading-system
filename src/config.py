@@ -93,6 +93,7 @@ def get_config():
         **SYSTEM_CONFIG,
         "environment": ENVIRONMENT,
         "base_dir": BASE_DIR,
+        "data_dir": DATA_DIR,
     }
 
     if ENVIRONMENT == "development":

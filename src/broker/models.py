@@ -1,0 +1,33 @@
+#!/usr/bin/env python3
+"""跨券商标准化数据模型（零业务逻辑，严格类型约束）"""
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Optional
+import uuid
+
+class OrderSide(Enum): BUY = "BUY"; SELL = "SELL"
+class OrderType(Enum): MARKET = "MARKET"; LIMIT = "LIMIT"
+class OrderStatu(Enum): 
+    PENDING = "PENDING"; FILLED = "FILLED"; PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    CANCELLED = "CANCELLED"; REJECTED = "REJECTED"; FAILED = "FAILED"
+class TimeInForce(Enum): DAY = "DAY"; GTC = "GTC"; IOC = "IOC"
+
+@dataclass(slots=True)
+class OrderRequest:
+    symbol: str; side: OrderSide; type: OrderType; quantity: int
+    time_in_force: TimeInForce = TimeInForce.DAY
+    client_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])  # 🔑 幂等防重单
+
+@dataclass(slots=True)
+class OrderCheck:
+    order_id: str; filled_price: Optional[float]
+    filled_qty: int; status: OrderStatu; updated_at: datetime
+
+@dataclass(slots=True)
+class Quote:
+    symbol: str; last_price: float; bid: float = 0.0; ask: float = 0.0; timestamp: Optional[datetime] = None
+
+@dataclass(slots=True)
+class KlineData:
+    ts: datetime; open: float; high: float; low: float; close: float; volume: float; confirmed: bool = True
