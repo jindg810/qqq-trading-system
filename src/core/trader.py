@@ -54,6 +54,10 @@ class QQQTrader:
             self.strategy.consecutive_losses = state.get("consecutive_losses", 0)
             self.strategy.daily_pnl = float(state.get("daily_pnl", 0.0))
             self.strategy.emergency_stopped = state.get("emergency_stopped", False)
+            
+            # ✅ 新增：恢复上次处理的交易日期（防重启误判）
+            last_date_str = state.get("last_trade_date")
+            self._current_date = datetime.fromisoformat(last_date_str) if last_date_str else None
 
     def _save_state(self):
         state = {
@@ -63,9 +67,16 @@ class QQQTrader:
             "trades_today": self.strategy.trades_today,
             "consecutive_losses": self.strategy.consecutive_losses,
             "daily_pnl": round(self.strategy.daily_pnl, 2),
-            "emergency_stopped": self.strategy.emergency_stopped
+            "emergency_stopped": self.strategy.emergency_stopped,
+            "last_trade_date": str(self._current_date) if self._current_date else None
         }
         self.data_manager.save_state(state)
+
+    def _trace_state(self):
+        logger.debug(f"当前状态: \
+                     持仓: {self.strategy.position}, 今日交易次数: {self.strategy.trades_today}, \
+                     连续亏损: {self.strategy.consecutive_losses}, 日盈亏: {self.strategy.daily_pnl:.2f}, \
+                     紧急停止: {self.strategy.emergency_stopped}, 当前日期: {self._current_date}")
 
 
     # ================= 订单执行 =================
@@ -104,6 +115,8 @@ class QQQTrader:
                 return False
             
             logger.info(f"📈 尝试开仓: {symbol}")
+            self._trace_state() # 状态追踪日志
+
             order = OrderRequest(
                 symbol=symbol,
                 quantity=CONFIG["max_position_size"],
@@ -160,32 +173,29 @@ class QQQTrader:
             if self.strategy.position: self._save_state()
 
     # ================= 行情回调 =================
-    def on_candlestick(self, symbol: str, event: KlineData):
+    def _on_kline(self, event: KlineData):
         try:
-            # 只处理已收盘的 K 线，避免未完成 K 线的价格波动导致误判
-            if not hasattr(event, "candlestick") or not getattr(event, "is_confirmed", False):
-                return
-                
-            cs = event.candlestick
-            print(f"收到行情: {cs} ")
+            ts_time = event.ts if isinstance(event.ts, datetime) else datetime.strptime(bar["ts"], "%Y-%m-%dT%H:%M:%SZ")
+            print(f"收到K线数据: {ts_time.isoformat()}, {event} ")
             bar = {
-                "open": float(cs.open),
-                "high": float(cs.high),
-                "low": float(cs.low),
-                "close": float(cs.close),
-                "volume": float(getattr(cs, "volume", 0)),
-                "ts": getattr(cs, "timestamp", None),
+                "open": event.open, "high": event.high,
+                "low": event.low, "close": event.close,
+                "volume": event.volume, "ts": event.ts,
             }
             
             # 1. 注入策略缓冲
             if not self.strategy.add_bar(bar): return
 
             # 2. 每日重置与CSV归档
-            bar_date = bar["ts"].date() if isinstance(bar["ts"], datetime) else datetime.strptime(bar["ts"], "%Y-%m-%dT%H:%M:%SZ").date()
-            if self._current_date != bar_date:
+            bar_date = ts_time.date()
+            # ✅ 核心优化：严格大于才触发，彻底杜绝重启当日重复执行
+            if self._current_date is None:
+                self._current_date = bar_date  # 首次启动或无记录时，安全初始化
+            elif bar_date > self._current_date:
                 self.strategy.reset_daily()
                 self._current_date = bar_date
                 self.data_manager.archive_csv()
+                self._save_state()  # 跨日切换后立即落盘，防断电丢失
             self.data_manager.write_kline_to_csv(bar)
 
             # 3. 盘前/盘后静默
@@ -241,9 +251,9 @@ class QQQTrader:
         retry, max_retries = 0, 5
         while retry < max_retries:
             try:
-                self.broker.set_kline_callback(self.on_candlestick)
-                # self.broker.subscribe_klines("700.HK")
-                self.broker.subscribe_klines(CONFIG["symbol"])
+                self.broker.set_kline_callback(self._on_kline)
+                self.broker.subscribe_klines("700.HK")
+                #self.broker.subscribe_klines(CONFIG["symbol"])
                 logger.info(f"✅ 已订阅 {CONFIG['symbol']} 1分钟K线行情")
                 threading.Event().wait()
             except KeyboardInterrupt:
