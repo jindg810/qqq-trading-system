@@ -50,8 +50,8 @@ class LongbridgeAdapter(BrokerAdapter):
 
     def disconnect(self) -> None:
         self._connected = False
-        if self.qc: self.qc.close()
-        if self.tc: self.tc.close()
+        #if self.qc: self.qc.close()
+        #if self.tc: self.tc.close()
         logger.info("🔌 长桥连接已关闭")
 
     def is_connected(self) -> bool: return self._connected
@@ -84,8 +84,6 @@ class LongbridgeAdapter(BrokerAdapter):
     def history_candlesticks_by_date(self, symbol: str, period: Period, adjust_type: AdjustType, target_date: datetime) -> List[Candlestick]:
         if not self.qc: raise ConnectionError("未连接")
         try:
-            start_dt = datetime(target_date.year, target_date.month, target_date.day, tzinfo=timezone.utc)
-            end_dt = start_dt + timedelta(days=1)
             candles = self.qc.history_candlesticks_by_date(
                         symbol=symbol,
                         period=period,
@@ -102,10 +100,22 @@ class LongbridgeAdapter(BrokerAdapter):
         if not self.qc: raise ConnectionError("未连接")
         try:
             res = self.qc.quote([symbol])
-            if res and res[0].last_done > 0:
-                return Quote(symbol=symbol, last_price=float(res[0].last_done),
-                             bid=float(res[0].bid or 0), ask=float(res[0].ask or 0))
-            return None
+            if not res: return None
+            sq = res[0]  # SecurityQuote 实例
+
+            # 🔑 安全转换：SDK 返回 Decimal / None，统一转为 float
+            def _safe_float(val): return float(val) if val is not None else 0.0
+
+            return Quote(
+                symbol=sq.symbol,
+                last_price=_safe_float(sq.last_done),
+                open=_safe_float(sq.open),
+                high=_safe_float(sq.high),
+                low=_safe_float(sq.low),
+                prev_close=_safe_float(sq.prev_close),
+                volume=int(sq.volume) if sq.volume else 0,
+                timestamp=sq.timestamp if hasattr(sq, 'timestamp') else None
+            )
         except Exception as e:
             raise OrderError(f"报价查询失败: {e}") from e
 
@@ -156,3 +166,114 @@ class LongbridgeAdapter(BrokerAdapter):
         """阻塞主线程等待行情/订单事件，支持 Ctrl+C 优雅退出"""
         try: threading.Event().wait()
         except KeyboardInterrupt: logger.info("⏹️ 收到退出信号")
+
+
+# ================= 独立 CLI 诊断测试 =================
+'''
+# 1. 基础诊断（连接/报价/K线/推送）
+python -m src.broker.longbridge --symbol QQQ.US
+# 2. 完整诊断（含订单流程，需手动确认 YES）
+python -m src.broker.longbridge --symbol QQQ.US --test-orders
+'''
+def run_diagnostic(broker: LongbridgeAdapter, symbol: str = "QQQ.US", test_orders: bool = False):
+    import time, sys, traceback
+    from datetime import date
+    from longbridge.openapi import Period, AdjustType
+
+    print("="*55)
+    print("🔍 长桥 Broker 适配器 CLI 诊断工具")
+    print("="*55)
+
+    try:
+        # 1. 连接与鉴权
+        print("\n🔗 [1/5] 测试连接与鉴权 (connect)...")
+        broker.connect()
+        assert broker.is_connected()
+        print("   ✅ PASS: 连接成功 & API Key 鉴权通过")
+
+        # 2. 实时报价
+        print("\n📊 [2/5] 测试实时报价 (get_quote)...")
+        quote = broker.quote(symbol)
+        assert quote and quote.last_price > 0
+        print(f"   ✅ PASS: {symbol} | Last: {quote.last_price} | volume: {quote.volume} | ts: {quote.timestamp}")
+
+        # 3. 历史K线
+        print("\n📈 [3/5] 测试历史K线 (history_candlesticks_by_date)...")
+        # 默认取今日，若非交易日会返回空列表或抛异常，属正常现象
+        target_date = datetime(2026, 5, 12, tzinfo=CONFIG["tz_et"])
+        candles = broker.history_candlesticks_by_date(symbol, Period.Min_1, AdjustType.ForwardAdjust, target_date)
+
+        if len(candles) > 0:
+            print(f"   ✅ PASS: 成功获取 {len(candles)} 条 1分钟K线 | 首根时间: {candles[0].timestamp}")
+        else:
+            print("   ⚠️ WARN: 返回0条 (可能当前非交易日或该日无数据)")
+
+        # 4. 实时K线推送
+        print("\n🔔 [4/5] 测试实时K线回调 (subscribe_klines + callback)...")
+        recv_count = 0
+        def _temp_cb(k: KlineData):
+            nonlocal recv_count
+            recv_count += 1
+            if recv_count <= 3:
+                print(f"   📩 收到: {k.ts.strftime('%H:%M:%S')} | O:{k.open} C:{k.close}")
+
+        broker.set_kline_callback(_temp_cb)
+        broker.subscribe_klines(symbol)
+        print("   ⏳ 监听中 (等待 60 秒接收推送)...")
+        time.sleep(60)  # 替代 wait_for_events，避免永久阻塞
+        if recv_count > 0:
+            print(f"   ✅ PASS: 共收到 {recv_count} 条实时K线推送")
+        else:
+            print("   ⚠️ WARN: 未收到推送 (可能当前非交易时段或网络订阅未生效)")
+
+        # 5. 订单流程 (高风险，默认关闭)
+        if test_orders:
+            print("\n📝 [5/5] 测试订单流程 (submit -> check -> cancel)...")
+            print("   ⚠️ 严重警告：此测试将向交易所发送真实请求！")
+            print("   💡 请确保 .env 中配置的是长桥模拟盘(Sandbox)环境！")
+            confirm = input("   确认继续? (输入 YES 并回车): ")
+            if confirm.strip().upper() == "YES":
+                try:
+                    q = broker.quote(symbol)
+                    # 设置远低于市价的限价单，100% 防误成交
+                    safe_price = round(q.last_price * 0.2, 2)
+                    req = OrderRequest(
+                        symbol=symbol, side=OrderSide.BUY, type=OrderType.LIMIT,
+                        quantity=1, price=safe_price
+                    )
+                    oid = broker.submit_order(req)
+                    print(f"   📤 提交成功 | OrderID: {oid} | 限价: {safe_price}")
+                    
+                    time.sleep(3)
+                    check = broker.check_order(oid)
+                    print(f"   🔍 状态查询: {check.status.name} | 成交数: {check.filled_qty}")
+                    
+                    broker.cancel_order(oid)
+                    print("   ✅ 撤单指令已发送 (流程测试完成)")
+                except Exception as e:
+                    print(f"   ❌ FAIL: {e}")
+                    traceback.print_exc()
+            else:
+                print("   ⏭️ 已取消订单测试")
+        else:
+            print("\n📝 [5/5] 跳过订单测试 (使用 --test-orders 开启)")
+
+    except Exception as e:
+        print(f"\n💥 诊断中断: {e}")
+        traceback.print_exc()
+        sys.exit(1)
+    finally:
+        print("\n🔌 正在断开连接...")
+        broker.disconnect()
+        print("🏁 诊断结束")
+
+if __name__ == "__main__":
+    import argparse
+
+    # CLI 参数解析
+    parser = argparse.ArgumentParser(description="长桥 Broker 接口 CLI 诊断工具")
+    parser.add_argument("--symbol", default="QQQ.US", help="测试标的代码 (默认: QQQ.US)")
+    parser.add_argument("--test-orders", action="store_true", help="开启订单提交/撤单流程测试 (高风险)")
+    args = parser.parse_args()
+    
+    run_diagnostic(broker = LongbridgeAdapter(), symbol=args.symbol, test_orders=args.test_orders)

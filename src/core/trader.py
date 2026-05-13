@@ -57,7 +57,7 @@ class QQQTrader:
             
             # ✅ 新增：恢复上次处理的交易日期（防重启误判）
             last_date_str = state.get("last_trade_date")
-            self._current_date = datetime.fromisoformat(last_date_str) if last_date_str else None
+            self._current_date = datetime.strptime(last_date_str, "%Y-%m-%d").date() if last_date_str else None
 
     def _save_state(self):
         state = {
@@ -68,7 +68,7 @@ class QQQTrader:
             "consecutive_losses": self.strategy.consecutive_losses,
             "daily_pnl": round(self.strategy.daily_pnl, 2),
             "emergency_stopped": self.strategy.emergency_stopped,
-            "last_trade_date": str(self._current_date) if self._current_date else None
+            "last_trade_date": self._current_date.strftime("%Y-%m-%d") if self._current_date else None
         }
         self.data_manager.save_state(state)
 
@@ -176,7 +176,7 @@ class QQQTrader:
     def _on_kline(self, event: KlineData):
         try:
             ts_time = event.ts if isinstance(event.ts, datetime) else datetime.strptime(bar["ts"], "%Y-%m-%dT%H:%M:%SZ")
-            print(f"收到K线数据: {ts_time.isoformat()}, {event} ")
+            print(f"收到K线数据: {ts_time.strftime('%Y-%m-%dT%H:%M:%SZ')}, {event} ")
             bar = {
                 "open": event.open, "high": event.high,
                 "low": event.low, "close": event.close,
@@ -188,10 +188,10 @@ class QQQTrader:
 
             # 2. 每日重置与CSV归档
             bar_date = ts_time.date()
+            #bar_date = event.ts.date() if isinstance(event.ts, datetime) else event.ts
+
             # ✅ 核心优化：严格大于才触发，彻底杜绝重启当日重复执行
-            if self._current_date is None:
-                self._current_date = bar_date  # 首次启动或无记录时，安全初始化
-            elif bar_date > self._current_date:
+            if self._current_date is None or bar_date > self._current_date:
                 self.strategy.reset_daily()
                 self._current_date = bar_date
                 self.data_manager.archive_csv()

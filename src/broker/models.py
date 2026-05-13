@@ -30,7 +30,14 @@ class OrderCheck:
 
 @dataclass(slots=True)
 class Quote:
-    symbol: str; last_price: float; bid: float = 0.0; ask: float = 0.0; timestamp: Optional[datetime] = None
+    symbol: str
+    last_price: float
+    open: float = 0.0
+    high: float = 0.0
+    low: float = 0.0
+    prev_close: float = 0.0
+    volume: int = 0
+    timestamp: Optional[datetime] = None
 
 @dataclass(slots=True)
 class KlineData:
