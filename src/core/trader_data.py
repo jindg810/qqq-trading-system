@@ -56,7 +56,7 @@ class TraderDataManager:
             with open(self.get_today_csv(), "a", newline="") as f:
                 csv.writer(f).writerow(
                     [
-                        datetime.now(CONFIG["tz_et"]).isoformat(),
+                        bar["ts"],
                         bar["open"],
                         bar["high"],
                         bar["low"],
@@ -71,10 +71,6 @@ class TraderDataManager:
         """归档当日CSV（按日期存储）"""
         try:
             now = datetime.now(CONFIG["tz_et"])
-            # ✅ 只在收盘后执行（16:05 之后）
-            if not (now.hour == 16 and now.minute >= 5):
-                return
-
             # 当日文件：today.csv
             today_csv = self.get_today_csv()
             archive_dir = CONFIG["records_dir"]

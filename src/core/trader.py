@@ -188,10 +188,9 @@ class QQQTrader:
 
             # 2. 每日重置与CSV归档
             bar_date = ts_time.date()
-            #bar_date = event.ts.date() if isinstance(event.ts, datetime) else event.ts
-
             # ✅ 核心优化：严格大于才触发，彻底杜绝重启当日重复执行
             if self._current_date is None or bar_date > self._current_date:
+                logger.info(f"跨日交易状态重置&数据归档, date:{self._current_date}")
                 self.strategy.reset_daily()
                 self._current_date = bar_date
                 self.data_manager.archive_csv()
