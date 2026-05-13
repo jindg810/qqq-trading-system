@@ -12,7 +12,7 @@ import os
 import shutil
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from src.config import CONFIG, DATA_DIR
@@ -70,15 +70,16 @@ class TraderDataManager:
     def archive_csv(self) -> None:
         """归档当日CSV（按日期存储）"""
         try:
-            now = datetime.now(CONFIG["tz_et"])
+            # 归档昨天的数据（开盘收到第1条数据时触发）
+            yesterday = datetime.now(CONFIG["tz_et"]) - timedelta(days=1)
             # 当日文件：today.csv
             today_csv = self.get_today_csv()
             archive_dir = CONFIG["records_dir"]
-            archive_csv = os.path.join(archive_dir, f"{now.strftime('%Y-%m-%d')}.csv")
+            archive_csv = os.path.join(archive_dir, f"{yesterday.strftime('%Y-%m-%d')}.csv")
 
             os.makedirs(archive_dir, exist_ok=True)
             if os.path.exists(archive_csv):
-                # logger.info("归档已存在，跳过")
+                logger.info("归档已存在，跳过")
                 return
 
             if not os.path.exists(today_csv):
