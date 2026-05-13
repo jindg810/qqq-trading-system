@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """长桥 OpenAPI 适配器（封装协议转换、重试、时区、生命周期）"""
-from abc import abstractmethod
-import time, logging, threading
-from datetime import datetime, timedelta, timezone
+import threading
+from datetime import datetime, timezone
 from typing import Callable, List, Optional
 from longbridge.openapi import AdjustType, Candlestick, Config, QuoteContext, TradeContext, Period, TradeSessions
-from longbridge.openapi import Order as LBOrder, OrderSide as LBSide, OrderType as LBType
-from longbridge.openapi import OrderStatus as LBStatus, TimeInForceType as LBTIF
+from longbridge.openapi import OrderSide as LBSide, OrderType as LBType
+from longbridge.openapi import TimeInForceType as LBTIF
+
+from src.logger import get_logger
+from src.core.strategy import QQQStrategy
 from src.broker.base import BrokerAdapter, BrokerError, ConnectionError, OrderError
-from src.broker.models import OrderRequest, OrderCheck, Quote, KlineData, OrderStatus, OrderSide, OrderType, TimeInForce
+from src.broker.models import OptionQuote, OrderRequest, OrderCheck, Quote, KlineData, OrderStatus, OrderSide, OrderType, TimeInForce
 from src.config import CONFIG
 
-logger = logging.getLogger("broker.longbridge")
+logger = get_logger("broker.longbridge")
 
 # 🔑 枚举映射表（集中管理，方便后续券商替换）
 SIDE_MAP = {OrderSide.BUY: LBSide.Buy, OrderSide.SELL: LBSide.Sell}
@@ -44,7 +46,9 @@ class LongbridgeAdapter(BrokerAdapter):
             self.qc = QuoteContext(cfg)
             self.tc = TradeContext(cfg)
             self._connected = True
-            logger.info("✅ 长桥连接成功")
+
+            lb_env = "🧪 模拟盘" if CONFIG.get("longbridge_use_sandbox") else "🔴 实盘"
+            logger.info(f"✅ 长桥连接成功 [{lb_env}]")
         except Exception as e:
             raise ConnectionError(f"长桥初始化失败: {e}") from e
 
@@ -96,6 +100,9 @@ class LongbridgeAdapter(BrokerAdapter):
         except Exception as e:
             raise BrokerError(f"历史K线数据查询失败: {e}") from e
     
+    # 🔑 安全转换：SDK 返回 Decimal / None，统一转为 float
+    def _safe_float(self, val): return float(val) if val is not None else 0.0
+
     def quote(self, symbol: str) -> Optional[Quote]:
         if not self.qc: raise ConnectionError("未连接")
         try:
@@ -103,22 +110,51 @@ class LongbridgeAdapter(BrokerAdapter):
             if not res: return None
             sq = res[0]  # SecurityQuote 实例
 
-            # 🔑 安全转换：SDK 返回 Decimal / None，统一转为 float
-            def _safe_float(val): return float(val) if val is not None else 0.0
-
             return Quote(
                 symbol=sq.symbol,
-                last_price=_safe_float(sq.last_done),
-                open=_safe_float(sq.open),
-                high=_safe_float(sq.high),
-                low=_safe_float(sq.low),
-                prev_close=_safe_float(sq.prev_close),
+                last_price=self._safe_float(sq.last_done),
+                open=self._safe_float(sq.open),
+                high=self._safe_float(sq.high),
+                low=self._safe_float(sq.low),
+                prev_close=self._safe_float(sq.prev_close),
                 volume=int(sq.volume) if sq.volume else 0,
                 timestamp=sq.timestamp if hasattr(sq, 'timestamp') else None
             )
         except Exception as e:
             raise OrderError(f"报价查询失败: {e}") from e
 
+    def quote_option(self, symbol: str) -> Optional[OptionQuote]:
+        if not self.qc: raise ConnectionError("未连接")
+        try:
+            res = self.qc.option_quote([symbol])
+            if not res: return None
+
+            oq = res[0]  # SDK OptionQuote 实例
+            return OptionQuote(
+                symbol=oq.symbol,
+                last_price=self._safe_float(oq.last_done),
+                prev_close=self._safe_float(oq.prev_close), 
+                open=self._safe_float(oq.open),
+                high=self._safe_float(oq.high), 
+                low=self._s_safe_floatf(oq.low),
+                volume=int(oq.volume) if oq.volume else 0,
+                turnover=self._safe_float(oq.turnover),
+                trade_status=str(oq.trade_status) if oq.trade_status else None,
+                implied_volatility=self._safe_float(oq.implied_volatility),
+                open_interest=int(oq.open_interest) if oq.open_interest else 0,
+                expiry_date=oq.expiry_date,
+                strike_price=self._safe_float(oq.strike_price),
+                contract_multiplier=self._safe_float(oq.contract_multiplier),
+                contract_type=str(oq.contract_type) if oq.contract_type else None,
+                contract_size=self._safe_float(oq.contract_size),
+                direction=str(oq.direction) if oq.direction else None,
+                historical_volatility=self._safe_float(oq.historical_volatility),
+                underlying_symbol=oq.underlying_symbol or "",
+                timestamp=getattr(oq, 'timestamp', None)
+            )
+        except Exception as e:
+            raise OrderError(f"期权报价查询失败: {e}") from e
+        
     def submit_order(self, order: OrderRequest) -> str:
         if not self.tc: raise ConnectionError("未连接")
         try:
@@ -186,19 +222,29 @@ def run_diagnostic(broker: LongbridgeAdapter, symbol: str = "QQQ.US", test_order
 
     try:
         # 1. 连接与鉴权
-        print("\n🔗 [1/5] 测试连接与鉴权 (connect)...")
+        print("\n🔗 [1/6] 测试连接与鉴权 (connect)...")
         broker.connect()
         assert broker.is_connected()
         print("   ✅ PASS: 连接成功 & API Key 鉴权通过")
 
         # 2. 实时报价
-        print("\n📊 [2/5] 测试实时报价 (get_quote)...")
+        print("\n📊 [2/6] 测试实时报价 (get_quote)...")
         quote = broker.quote(symbol)
         assert quote and quote.last_price > 0
         print(f"   ✅ PASS: {symbol} | Last: {quote.last_price} | volume: {quote.volume} | ts: {quote.timestamp}")
 
+        # 3. 实时期权报价
+        try:
+            print("\n📊 [3/6] 测试期权报价 (get_quote)...")
+            op_symbol = QQQStrategy.generate_option_symbol(1.00, OrderSide.BUY)
+            op_quote = broker.quote_option(op_symbol)
+            assert op_quote and op_quote.last_price > 0
+            print(f"   ✅ PASS: {op_symbol} | Last: {op_quote.last_price} | volume: {op_quote.volume} | ts: {op_quote.timestamp}")
+        except Exception as ex:
+            print(f"   ⚠️ WARN: May be no quote access. ex: {ex}")
+
         # 3. 历史K线
-        print("\n📈 [3/5] 测试历史K线 (history_candlesticks_by_date)...")
+        print("\n📈 [4/6] 测试历史K线 (history_candlesticks_by_date)...")
         # 默认取今日，若非交易日会返回空列表或抛异常，属正常现象
         target_date = datetime(2026, 5, 12, tzinfo=CONFIG["tz_et"])
         candles = broker.history_candlesticks_by_date(symbol, Period.Min_1, AdjustType.ForwardAdjust, target_date)
@@ -209,7 +255,7 @@ def run_diagnostic(broker: LongbridgeAdapter, symbol: str = "QQQ.US", test_order
             print("   ⚠️ WARN: 返回0条 (可能当前非交易日或该日无数据)")
 
         # 4. 实时K线推送
-        print("\n🔔 [4/5] 测试实时K线回调 (subscribe_klines + callback)...")
+        print("\n🔔 [5/6] 测试实时K线回调 (subscribe_klines + callback)...")
         recv_count = 0
         def _temp_cb(k: KlineData):
             nonlocal recv_count
@@ -228,7 +274,7 @@ def run_diagnostic(broker: LongbridgeAdapter, symbol: str = "QQQ.US", test_order
 
         # 5. 订单流程 (高风险，默认关闭)
         if test_orders:
-            print("\n📝 [5/5] 测试订单流程 (submit -> check -> cancel)...")
+            print("\n📝 [6/6] 测试订单流程 (submit -> check -> cancel)...")
             print("   ⚠️ 严重警告：此测试将向交易所发送真实请求！")
             print("   💡 请确保 .env 中配置的是长桥模拟盘(Sandbox)环境！")
             confirm = input("   确认继续? (输入 YES 并回车): ")

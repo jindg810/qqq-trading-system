@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Callable, List, Optional
 
 from longbridge.openapi import AdjustType, Candlestick, Period
-from .models import OrderRequest, OrderCheck, Quote, KlineData
+from .models import OptionQuote, OrderRequest, OrderCheck, Quote, KlineData
 
 class BrokerError(Exception): pass
 class ConnectionError(BrokerError): pass
@@ -37,6 +37,10 @@ class BrokerAdapter(ABC):
     # 订单相关接口
     @abstractmethod
     def quote(self, symbol: str) -> Optional[Quote]: ...
+    
+    # ✅ 新增：期权专用报价接口
+    @abstractmethod
+    def quote_option(self, symbol: str) -> Optional[OptionQuote]: ...
     
     # 订单提交接口
     @abstractmethod

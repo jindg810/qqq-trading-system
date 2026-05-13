@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """跨券商标准化数据模型（零业务逻辑，严格类型约束）"""
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 import uuid
@@ -39,6 +39,29 @@ class Quote:
     volume: int = 0
     timestamp: Optional[datetime] = None
 
+@dataclass(slots=True)
+class OptionQuote:
+    symbol: str
+    last_price: float
+    prev_close: float = 0.0
+    open: float = 0.0
+    high: float = 0.0
+    low: float = 0.0
+    timestamp: Optional[datetime] = None
+    volume: int = 0
+    turnover: float = 0.0
+    trade_status: Optional[str] = None
+    implied_volatility: float = 0.0
+    open_interest: int = 0
+    expiry_date: Optional[date] = None
+    strike_price: float = 0.0
+    contract_multiplier: float = 100.0
+    contract_type: Optional[str] = None
+    contract_size: float = 100.0
+    direction: Optional[str] = None
+    historical_volatility: float = 0.0
+    underlying_symbol: str = ""
+    
 @dataclass(slots=True)
 class KlineData:
     ts: datetime; open: float; high: float; low: float; close: float; volume: float; confirmed: bool = True

@@ -135,7 +135,7 @@ class QQQTrader:
             
             # 抓取最新报价确认成交价
             time.sleep(1)
-            quote = self.broker.quote(symbol)
+            quote = self.broker.quote_option(symbol)
             if quote and quote.last_price > 0:
                 fill_price = quote.last_price
                 
@@ -236,7 +236,7 @@ class QQQTrader:
         self.last_opt_poll = time.time()
         
         try:
-            quote = self.broker.quote([self.strategy.position["symbol"]])
+            quote = self.broker.quote_option([self.strategy.position["symbol"]])
             if quote and quote.last_price > 0:
                 exit_reason = self.strategy.check_position_exit(float(quote.last_price))
                 if exit_reason:
