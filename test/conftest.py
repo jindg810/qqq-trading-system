@@ -89,6 +89,8 @@ def mock_broker():
     mb.submit_order.return_value = "MOCK_ORD_001"
     mb.check_order.return_value = None  # 默认未成交
     mb.quote.return_value = None
+    mb.quote.return_value = None
+    mb.quote_option.return_value = None
     mb.cancel_order.return_value = True
     yield mb
 

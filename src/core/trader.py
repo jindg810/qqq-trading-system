@@ -175,7 +175,7 @@ class QQQTrader:
     # ================= 行情回调 =================
     def _on_kline(self, event: KlineData):
         try:
-            ts_time = event.ts if isinstance(event.ts, datetime) else datetime.strptime(bar["ts"], "%Y-%m-%dT%H:%M:%SZ")
+            ts_time = event.ts if isinstance(event.ts, datetime) else datetime.strptime(event.ts, "%Y-%m-%dT%H:%M:%SZ")
             print(f"收到K线数据: {ts_time.strftime('%Y-%m-%dT%H:%M:%SZ')}, {event} ")
             bar = {
                 "open": event.open, "high": event.high,

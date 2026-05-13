@@ -37,7 +37,7 @@ class TestOrderExecution:
     @patch('core.trader.time.sleep')
     def test_execute_open_success(self, mock_sleep, trader, freeze_trade_time):
         trader.broker.submit_order.return_value = "ORD_123"
-        trader.broker.quote.return_value = Quote(symbol="TEST", last_price=1.55)
+        trader.broker.quote_option.return_value = Quote(symbol="TEST", last_price=1.55)
         trader.broker.check_order.return_value = OrderCheck(
             order_id="ORD_123", filled_price=1.50, 
             filled_qty=1, status=OrderStatus.FILLED, 
@@ -58,7 +58,7 @@ class TestOrderExecution:
         # ✅ 验证调用链
         trader.broker.submit_order.assert_called_once()
         trader.broker.check_order.assert_called_once_with(order_ids=["ORD_123"])
-        trader.broker.quote.assert_called_once()
+        trader.broker.quote_option.assert_called_once()
         trader.data_manager.save_state.assert_called()
 
     @pytest.mark.skip(reason="⏸️ 临时跳过：等待Order冲突解决")
@@ -74,24 +74,22 @@ class TestOrderExecution:
         trader.data_manager.save_state.assert_called()
 
 class TestTraderCallbacks:
-    def test_on_candlestick_skips_unconfirmed(self, trader):
+    def test_on_kline_skips_unconfirmed(self, trader):
         mock_event = MagicMock()
         mock_event.is_confirmed = False
         mock_event.candlestick = MagicMock()
         
-        trader.on_candlestick("QQQ.US", mock_event)
+        trader._on_kline(mock_event)
         trader.data_manager.write_kline_to_csv.assert_not_called()
 
-    def test_on_candlestick_processes_confirmed(self, trader, freeze_trade_time):
-        mock_event = MagicMock()
-        mock_event.is_confirmed = True
+    def test_on_kline_processes_confirmed(self, trader, freeze_trade_time):
         # 模拟长桥推送的K线对象
-        mock_event.candlestick = MagicMock(
+        mock_event = MagicMock(
             open=450.0, high=450.5, low=449.5, close=450.2, volume=100000,
-            timestamp="2026-05-08T14:00:00Z"
+            ts="2026-05-08T14:00:00Z"
         )
         
-        trader.on_candlestick("QQQ.US", mock_event)
+        trader._on_kline(mock_event)
         
         # 验证数据成功注入策略缓冲 & CSV写入被调用
         assert len(trader.strategy.bars) == 1
@@ -99,12 +97,10 @@ class TestTraderCallbacks:
         trader.data_manager.write_kline_to_csv.assert_called_once()
         trader.data_manager.save_state.assert_called_once()
 
-    def test_on_candlestick_respects_risk_fuse(self, trader, freeze_trade_time):
+    def test_on_kline_respects_risk_fuse(self, trader, freeze_trade_time):
         trader.strategy.emergency_stopped = True  # 触发熔断
-        mock_event = MagicMock()
-        mock_event.is_confirmed = True
-        mock_event.candlestick = MagicMock(open=450.0, high=450.5, low=449.5, close=450.2, volume=100000, timestamp="2026-05-08T14:00:00Z")
+        mock_event = MagicMock(open=450.0, high=450.5, low=449.5, close=450.2, volume=100000, timestamp="2026-05-08T14:00:00Z")
         
-        trader.on_candlestick("QQQ.US", mock_event)
+        trader._on_kline(mock_event)
         # 熔断后不应调用开仓或状态保存（仅记录K线）
         trader.broker.submit_order.assert_not_called()
