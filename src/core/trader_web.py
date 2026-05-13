@@ -21,7 +21,7 @@ from src.logger import get_logger
 from src.config import CONFIG
 
 load_dotenv()
-logger = get_logger(__name__)
+logger = get_logger("core.trader_web")
 
 app = Flask(__name__, template_folder=str(CONFIG["base_dir"] / "templates"))
 

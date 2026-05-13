@@ -77,6 +77,11 @@ SYSTEM_CONFIG = {
     "check_interval": 20,
 }
 
+# ================= LongBridge配置 ==================
+LONGBRIDGE_CONFIG = {
+    "longbridge_use_sandbox": os.getenv("LONGBRIDGE_USE_SANDBOX", "false").lower() == "true",
+}
+
 # ===================== 环境配置 =====================
 ENVIRONMENT = os.getenv("TRADING_ENV", "production")
 
@@ -91,6 +96,7 @@ def get_config():
         **STRATEGY_CONFIG,
         **RISK_CONFIG,
         **SYSTEM_CONFIG,
+        **LONGBRIDGE_CONFIG,
         "environment": ENVIRONMENT,
         "base_dir": BASE_DIR,
         "data_dir": DATA_DIR,

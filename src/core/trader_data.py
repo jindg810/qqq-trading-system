@@ -19,7 +19,7 @@ from src.config import CONFIG, DATA_DIR
 from src.logger import get_logger
 
 # 设置日志
-logger = get_logger(__name__)
+logger = get_logger("core.trader_data")
 
 
 class TraderDataManager:
