@@ -63,17 +63,22 @@ class TestOrderExecution:
         trader.broker.quote_option.assert_called_once()
         trader.data_manager.save_state.assert_called()
 
-    @pytest.mark.skip(reason="⏸️ 临时跳过：等待Order冲突解决")
-    def test_execute_close_success(self, trader, freeze_trade_time):
+    # @pytest.mark.skip(reason="⏸️ 临时跳过：等待Order冲突解决")
+    def test_execute_close_success(self, trader, freeze_trade_time, mock_notifier):
         trader.strategy.open_position("call", 450.0, 1.0, "TEST")
         trader.broker.submit_order.return_value = "ORD_CLOSE"
-        trader.broker.check_order.return_value = [MagicMock(filled_quantity=1, filled_avg_price=1.80, status=OrderStatus.Filled)]
+        trader.broker.check_order.return_value = OrderCheck(
+            order_id="ORD_123", filled_price=1.80, 
+            filled_qty=1, status=OrderStatus.FILLED, 
+            updated_at=freeze_trade_time
+        )
 
         trader._execute_close("TAKE_PROFIT")
         
         assert trader.strategy.position is None
         trader.broker.submit_order.assert_called_once()
         trader.data_manager.save_state.assert_called()
+        mock_notifier.notify_close.assert_called_once()
 
 class TestTraderCallbacks:
     def test_on_kline_skips_unconfirmed(self, trader):
