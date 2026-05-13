@@ -138,7 +138,7 @@ class LongbridgeAdapter(BrokerAdapter):
                 prev_close=self._safe_float(oq.prev_close), 
                 open=self._safe_float(oq.open),
                 high=self._safe_float(oq.high), 
-                low=self._s_safe_floatf(oq.low),
+                low=self._safe_float(oq.low),
                 volume=int(oq.volume) if oq.volume else 0,
                 turnover=self._safe_float(oq.turnover),
                 trade_status=str(oq.trade_status) if oq.trade_status else None,

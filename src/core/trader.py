@@ -237,7 +237,7 @@ class QQQTrader:
         self.last_opt_poll = time.time()
         
         try:
-            quote = self.broker.quote_option([self.strategy.position["symbol"]])
+            quote = self.broker.quote_option(self.strategy.position["symbol"])
             if quote and quote.last_price > 0:
                 exit_reason = self.strategy.check_position_exit(float(quote.last_price))
                 if exit_reason:
