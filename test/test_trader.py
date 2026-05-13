@@ -26,7 +26,7 @@ class TestOrderExecution:
 
     @patch('core.trader.time.sleep')
     def test_wait_for_fill_timeout_cancel(self, mock_sleep, trader):
-        trader.broker.check_order.return_value = []
+        trader.broker.check_order.return_value = None
         trader.broker.cancel_order = MagicMock()
         
         price = trader._wait_for_order_fill("ORD_002", timeout=1)
@@ -57,7 +57,7 @@ class TestOrderExecution:
 
         # ✅ 验证调用链
         trader.broker.submit_order.assert_called_once()
-        trader.broker.check_order.assert_called_once_with(order_ids=["ORD_123"])
+        trader.broker.check_order.assert_called_once_with("ORD_123")
         trader.broker.quote_option.assert_called_once()
         trader.data_manager.save_state.assert_called()
 
@@ -77,7 +77,6 @@ class TestTraderCallbacks:
     def test_on_kline_skips_unconfirmed(self, trader):
         mock_event = MagicMock()
         mock_event.is_confirmed = False
-        mock_event.candlestick = MagicMock()
         
         trader._on_kline(mock_event)
         trader.data_manager.write_kline_to_csv.assert_not_called()

@@ -64,4 +64,7 @@ class OptionQuote:
     
 @dataclass(slots=True)
 class KlineData:
-    ts: datetime; open: float; high: float; low: float; close: float; volume: float; confirmed: bool = True
+    ts: datetime; open: float; 
+    high: float; low: float; 
+    close: float; volume: float; 
+    is_confirmed: bool = True

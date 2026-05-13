@@ -67,7 +67,7 @@ class LongbridgeAdapter(BrokerAdapter):
     def set_kline_callback(self, callback: Callable[[KlineData], None]) -> None:
         self._kline_cb = callback
         def _wrapper(sym, event):
-            if not getattr(event, "is_confirmed", False): return
+            if not getattr(event, "candlestick", False): return
             cs = event.candlestick
             raw_ts = getattr(cs, "timestamp", None)
             # 🔑 安全时区转换（兼容 int毫秒 / ISO字符串 / datetime）
@@ -80,8 +80,10 @@ class LongbridgeAdapter(BrokerAdapter):
             
             if self._kline_cb:
                 self._kline_cb(KlineData(
-                    ts=ts, open=float(cs.open), high=float(cs.high), low=float(cs.low),
-                    close=float(cs.close), volume=float(getattr(cs, "volume", 0)), confirmed=True
+                    ts = ts, open=float(cs.open), high = float(cs.high), 
+                    low = float(cs.low), close = float(cs.close), 
+                    volume = float(getattr(cs, "volume", 0)), 
+                    is_confirmed = getattr(event, "is_confirmed", False)
                 ))
         self.qc.set_on_candlestick(_wrapper)
 
@@ -260,13 +262,13 @@ def run_diagnostic(broker: LongbridgeAdapter, symbol: str = "QQQ.US", test_order
         def _temp_cb(k: KlineData):
             nonlocal recv_count
             recv_count += 1
-            if recv_count <= 3:
+            if recv_count == 1:
                 print(f"   📩 收到: {k.ts.strftime('%H:%M:%S')} | O:{k.open} C:{k.close}")
 
         broker.set_kline_callback(_temp_cb)
         broker.subscribe_klines(symbol)
-        print("   ⏳ 监听中 (等待 60 秒接收推送)...")
-        time.sleep(60)  # 替代 wait_for_events，避免永久阻塞
+        print("   ⏳ 监听中 (等待 15 秒接收推送)...")
+        time.sleep(15)  # 替代 wait_for_events，避免永久阻塞
         if recv_count > 0:
             print(f"   ✅ PASS: 共收到 {recv_count} 条实时K线推送")
         else:

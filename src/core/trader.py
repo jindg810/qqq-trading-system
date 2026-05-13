@@ -84,7 +84,7 @@ class QQQTrader:
         start = time.time()
         while time.time() - start < timeout:
             try:
-                order = self.broker.check_order(order_ids=[order_id])
+                order = self.broker.check_order(order_id)
                 if not order:
                     time.sleep(CONFIG.get("order_check_interval", 1))
                     continue
@@ -175,6 +175,7 @@ class QQQTrader:
     # ================= 行情回调 =================
     def _on_kline(self, event: KlineData):
         try:
+            if not getattr(event, "is_confirmed", False): return
             ts_time = event.ts if isinstance(event.ts, datetime) else datetime.strptime(event.ts, "%Y-%m-%dT%H:%M:%SZ")
             print(f"收到K线数据: {ts_time.strftime('%Y-%m-%dT%H:%M:%SZ')}, {event} ")
             bar = {

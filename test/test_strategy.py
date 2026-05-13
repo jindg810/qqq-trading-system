@@ -125,6 +125,7 @@ class TestPositionManagement:
         # ✅ 设置 peak_pnl = 0.95 (+95%)
         # 要求：peak < 1.0 (避开止盈) 且 (peak - 当前pnl) >= 0.3 (触发回撤)
         # 当前 pnl = (1.6-1.0)/1.0 = 0.6 → 0.95 - 0.6 = 0.35 >= 0.30 
+        # 验证回撤触发条件
         self.strat.position["peak_pnl"] = 0.95
         assert self.strat.check_position_exit(1.6) == ExitReason.TRAILING_STOP
 
