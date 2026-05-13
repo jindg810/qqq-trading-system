@@ -3,8 +3,9 @@
 core/trader.py 单元测试
 覆盖：订单提交/成交/取消 / 状态持久化 / 行情回调路由
 """
+from datetime import datetime
 from unittest.mock import patch, MagicMock
-from src.broker.models import OrderCheck, OrderStatus, Quote
+from src.broker.models import KlineData, OrderCheck, OrderStatus, Quote
 import pytest
 
 from test.conftest import base_time
@@ -35,7 +36,7 @@ class TestOrderExecution:
     
     #@pytest.mark.skip(reason="⏸️ 临时跳过：等待Order冲突解决")
     @patch('core.trader.time.sleep')
-    def test_execute_open_success(self, mock_sleep, trader, freeze_trade_time):
+    def test_execute_open_success(self, mock_sleep, trader, freeze_trade_time, mock_notifier):
         trader.broker.submit_order.return_value = "ORD_123"
         trader.broker.quote_option.return_value = Quote(symbol="TEST", last_price=1.55)
         trader.broker.check_order.return_value = OrderCheck(
@@ -56,6 +57,7 @@ class TestOrderExecution:
         assert trader.strategy.trades_today == 1
 
         # ✅ 验证调用链
+        mock_notifier.notify_open.assert_called_once()
         trader.broker.submit_order.assert_called_once()
         trader.broker.check_order.assert_called_once_with("ORD_123")
         trader.broker.quote_option.assert_called_once()
@@ -82,10 +84,13 @@ class TestTraderCallbacks:
         trader.data_manager.write_kline_to_csv.assert_not_called()
 
     def test_on_kline_processes_confirmed(self, trader, freeze_trade_time):
+        # 预设已初始化日期，避免触发首次跨日保存，确保仅调用 1 次
+        trader._current_date = freeze_trade_time.date()
         # 模拟长桥推送的K线对象
-        mock_event = MagicMock(
-            open=450.0, high=450.5, low=449.5, close=450.2, volume=100000,
-            ts="2026-05-08T14:00:00Z"
+        mock_event = KlineData(
+            open=450.0, high=450.5, 
+            low=449.5, close=450.2, volume=100000,
+            ts=freeze_trade_time, is_confirmed=True
         )
         
         trader._on_kline(mock_event)
@@ -96,10 +101,16 @@ class TestTraderCallbacks:
         trader.data_manager.write_kline_to_csv.assert_called_once()
         trader.data_manager.save_state.assert_called_once()
 
-    def test_on_kline_respects_risk_fuse(self, trader, freeze_trade_time):
+    def test_on_kline_respects_risk_fuse(self, trader, freeze_trade_time, mock_notifier):
         trader.strategy.emergency_stopped = True  # 触发熔断
-        mock_event = MagicMock(open=450.0, high=450.5, low=449.5, close=450.2, volume=100000, timestamp="2026-05-08T14:00:00Z")
+        trader._current_date = freeze_trade_time.date() # 预设初始化日期，避免跨日归档
+        mock_event = KlineData(
+            open=450.0, high=450.5, 
+            low=449.5, close=450.2, volume=100000, 
+            ts=freeze_trade_time, is_confirmed=True
+        )
         
         trader._on_kline(mock_event)
         # 熔断后不应调用开仓或状态保存（仅记录K线）
+        mock_notifier.notify_risk_fuse.assert_called_once()
         trader.broker.submit_order.assert_not_called()

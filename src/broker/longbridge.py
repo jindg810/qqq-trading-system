@@ -133,26 +133,26 @@ class LongbridgeAdapter(BrokerAdapter):
 
             oq = res[0]  # SDK OptionQuote 实例
             return OptionQuote(
-                symbol=oq.symbol,
-                last_price=self._safe_float(oq.last_done),
-                prev_close=self._safe_float(oq.prev_close), 
-                open=self._safe_float(oq.open),
-                high=self._safe_float(oq.high), 
-                low=self._safe_float(oq.low),
-                volume=int(oq.volume) if oq.volume else 0,
-                turnover=self._safe_float(oq.turnover),
-                trade_status=str(oq.trade_status) if oq.trade_status else None,
-                implied_volatility=self._safe_float(oq.implied_volatility),
-                open_interest=int(oq.open_interest) if oq.open_interest else 0,
-                expiry_date=oq.expiry_date,
-                strike_price=self._safe_float(oq.strike_price),
-                contract_multiplier=self._safe_float(oq.contract_multiplier),
-                contract_type=str(oq.contract_type) if oq.contract_type else None,
-                contract_size=self._safe_float(oq.contract_size),
-                direction=str(oq.direction) if oq.direction else None,
-                historical_volatility=self._safe_float(oq.historical_volatility),
-                underlying_symbol=oq.underlying_symbol or "",
-                timestamp=getattr(oq, 'timestamp', None)
+                symbol = oq.symbol,
+                last_price = self._safe_float(oq.last_done),
+                prev_close = self._safe_float(oq.prev_close), 
+                open = self._safe_float(oq.open),
+                high = self._safe_float(oq.high), 
+                low = self._safe_float(oq.low),
+                volume = int(oq.volume) if oq.volume else 0,
+                turnover = self._safe_float(oq.turnover),
+                trade_status = str(oq.trade_status) if oq.trade_status else None,
+                implied_volatility = self._safe_float(oq.implied_volatility),
+                open_interest = int(oq.open_interest) if oq.open_interest else 0,
+                expiry_date = oq.expiry_date,
+                strike_price = self._safe_float(oq.strike_price),
+                contract_multiplier = self._safe_float(oq.contract_multiplier),
+                contract_type = str(oq.contract_type) if oq.contract_type else None,
+                contract_size = self._safe_float(oq.contract_size),
+                direction = str(oq.direction) if oq.direction else None,
+                historical_volatility = self._safe_float(oq.historical_volatility),
+                underlying_symbol = oq.underlying_symbol or "",
+                timestamp = getattr(oq, 'timestamp', None)
             )
         except Exception as e:
             raise OrderError(f"期权报价查询失败: {e}") from e

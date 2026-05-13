@@ -97,7 +97,7 @@ def mock_broker():
 @pytest.fixture(scope="function")
 def mock_data_manager():
     """Mock 数据管理器，隔离 state.json / today.csv 真实读写"""
-    with patch("core.trader.TraderDataManager") as MockDM:
+    with patch("src.core.trader.TraderDataManager") as MockDM:
         dm = MockDM.return_value
         dm.load_state.return_value = None
         dm.save_state.return_value = True
@@ -105,9 +105,13 @@ def mock_data_manager():
         dm.init_csv.return_value = None
         yield dm
 
+@pytest.fixture(scope="function")
+def mock_notifier():
+    with patch("src.core.trader.Notifier") as MockNotifier:
+        yield MockNotifier.return_value
 
 @pytest.fixture(scope="function")
-def trader(mock_broker, mock_data_manager):
+def trader(mock_broker, mock_data_manager, mock_notifier):
     """
     提供已初始化、已注入 Mock 的 QQQTrader 实例
     ✅ 每个用例获得独立干净的状态

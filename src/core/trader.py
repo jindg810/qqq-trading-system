@@ -156,9 +156,9 @@ class QQQTrader:
             order = OrderRequest(
                 symbol=symbol,
                 quantity=CONFIG["max_position_size"],
-                side=OrderSide.Sell,
-                order_type=OrderType.MO,
-                time_in_force=TimeInForce.Day,
+                side=OrderSide.SELL,
+                type=OrderType.MARKET,
+                time_in_force=TimeInForce.DAY,
             )
             order_id = self.broker.submit_order(order)
             fill_price = self._wait_for_order_fill(order_id)
