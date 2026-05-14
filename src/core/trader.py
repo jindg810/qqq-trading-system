@@ -252,8 +252,8 @@ class QQQTrader:
         while retry < max_retries:
             try:
                 self.broker.set_kline_callback(self._on_kline)
-                self.broker.subscribe_klines("700.HK")
-                #self.broker.subscribe_klines(CONFIG["symbol"])
+                #self.broker.subscribe_klines("700.HK")
+                self.broker.subscribe_klines(CONFIG["symbol"])
                 logger.info(f"✅ 已订阅 {CONFIG['symbol']} 1分钟K线行情")
                 threading.Event().wait()
             except KeyboardInterrupt:

@@ -3,7 +3,7 @@
 import threading
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
-from longbridge.openapi import AdjustType, Candlestick, Config, QuoteContext, TradeContext, Period, TradeSessions
+from longbridge.openapi import AdjustType, Candlestick, Config, QuoteContext, SubmitOrderResponse, TradeContext, Period, TradeSessions
 from longbridge.openapi import OrderSide as LBSide, OrderType as LBType
 from longbridge.openapi import TimeInForceType as LBTIF
 
@@ -163,7 +163,7 @@ class LongbridgeAdapter(BrokerAdapter):
             if order.type == OrderType.LIMIT and not order.price:
                 raise OrderError("限价单必须指定 price 参数")
 
-            order_id = self.tc.submit_order(
+            order_resp = self.tc.submit_order(
                 symbol=order.symbol, 
                 submitted_quantity=order.quantity,
                 side=SIDE_MAP[order.side], 
@@ -171,31 +171,33 @@ class LongbridgeAdapter(BrokerAdapter):
                 submitted_price=order.price if order.type == OrderType.LIMIT else None,
                 time_in_force=TIF_MAP[order.time_in_force]
             )
-            logger.debug(f"📤 订单提交: {order.client_id} -> {order_id}")
-            return order_id
+            logger.debug(f"📤 订单提交: {order.symbol}-{order.client_id} -> {order_resp}")
+            return order_resp.order_id if order_resp else None
         except Exception as e:
             raise OrderError(f"订单提交失败: {e}") from e
 
     def cancel_order(self, order_id: str) -> bool:
         if not self.tc: return False
-        try: self.tc.cancel_order(order_id); return True
+        try: 
+            self.tc.cancel_order(order_id); 
+            return True
         except: return False
 
     def check_order(self, order_id: str) -> Optional[OrderCheck]:
         if not self.tc: return None
         try:
-            orders = self.tc.history_orders(order_ids=[order_id])
+            orders = self.tc.today_orders(order_id=order_id)
             if not orders: return None
-            o = orders[0]
             
+            o = orders[0]
             status_name = type(o.status).__name__
             mapped_status = _STATUS_NAME_MAP.get(status_name, OrderStatus.PENDING)
             return OrderCheck(
-                order_id=order_id,
-                filled_price=float(o.filled_avg_price) if o.filled_avg_price > 0 else None,
-                filled_qty=o.filled_quantity,
-                status=mapped_status,
-                updated_at=datetime.now(CONFIG["tz_et"])
+                order_id = order_id,
+                filled_price = float(o.executed_price) if o.executed_price is not None else None,
+                filled_qty = o.executed_quantity if o.executed_quantity is not None else 0,
+                status = mapped_status,
+                updated_at = o.updated_at or datetime.now(CONFIG["tz_et"]) # 兜底防 None
             )
         except Exception as e:
             raise OrderError(f"订单状态查询失败: {e}") from e
@@ -267,8 +269,8 @@ def run_diagnostic(broker: LongbridgeAdapter, symbol: str = "QQQ.US", test_order
 
         broker.set_kline_callback(_temp_cb)
         broker.subscribe_klines(symbol)
-        print("   ⏳ 监听中 (等待 15 秒接收推送)...")
-        time.sleep(15)  # 替代 wait_for_events，避免永久阻塞
+        print("   ⏳ 监听中 (等待 5 秒接收推送)...")
+        time.sleep(5)  # 替代 wait_for_events，避免永久阻塞
         if recv_count > 0:
             print(f"   ✅ PASS: 共收到 {recv_count} 条实时K线推送")
         else:
@@ -289,14 +291,14 @@ def run_diagnostic(broker: LongbridgeAdapter, symbol: str = "QQQ.US", test_order
                         symbol=symbol, side=OrderSide.BUY, type=OrderType.LIMIT,
                         quantity=1, price=safe_price
                     )
-                    oid = broker.submit_order(req)
-                    print(f"   📤 提交成功 | OrderID: {oid} | 限价: {safe_price}")
+                    order_id = broker.submit_order(req)
+                    print(f"   📤 提交成功 | OrderId: {order_id} | 限价: {safe_price}")
                     
                     time.sleep(3)
-                    check = broker.check_order(oid)
+                    check = broker.check_order(order_id)
                     print(f"   🔍 状态查询: {check.status.name} | 成交数: {check.filled_qty}")
                     
-                    broker.cancel_order(oid)
+                    broker.cancel_order(order_id)
                     print("   ✅ 撤单指令已发送 (流程测试完成)")
                 except Exception as e:
                     print(f"   ❌ FAIL: {e}")
