@@ -332,6 +332,10 @@ class KlineDownloader:
 
 # ==================== CLI 接口 ====================
 def main():
+    '''
+    python -m src.backtest.kline_downloader --mode=month --value day='2026-05'
+    python -m src.backtest.kline_downloader --mode=day --value day='2026-05-10'
+    '''
     parser = argparse.ArgumentParser(description="长桥 K 线数据下载器")
     parser.add_argument("--mode", choices=['day', 'month', 'range'], required=True,
                        help="下载模式: day(单日), month(整月), range(日期区间)")

@@ -1,40 +1,45 @@
 #!/usr/bin/env python3
-import sys
-import os
-import logging
-from config import CONFIG
-from logger import get_logger
-from backtest.data_loader import DataLoader
-from backtest.engine import BacktestEngine
-from backtest.report import ReportGenerator
+"""回测主入口（串联 Engine 与 Report）"""
+import argparse
+from datetime import date
+from pathlib import Path
+from src.backtest.engine import BacktestEngine, BacktestConfig
+from src.backtest.report import ReportGenerator
 
-# 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s: %(message)s')
-logger = get_logger("backtest.main")
-
-def main():
-    csv_path = "data/qqq_1min.csv"  # 替换为你的历史数据路径
-    if not os.path.exists(csv_path):
-        logger.error(f"❌ 未找到数据文件: {csv_path}")
-        sys.exit(1)
-
-    try:
-        # 1. 加载清洗数据
-        bars = DataLoader.load_and_clean(csv_path)
-        
-        # 2. 运行回测
-        engine = BacktestEngine(initial_capital=100000.0)
-        trades = engine.run(bars)
-        
-        # 3. 生成报告
-        reporter = ReportGenerator(trades)
-        metrics = reporter.calculate_metrics()
-        reporter.save_results(metrics)
-        
-        print("\n🎉 回测完成！请查看 backtest/results/report.html")
-    except Exception as e:
-        logger.critical(f"💥 回测执行失败: {e}")
-        sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+
+    parser = argparse.ArgumentParser(description="QQQ 0DTE 专业回测引擎")
+    parser.add_argument("--start", default="2024-05-01", help="回测起始日期 (YYYY-MM-DD)")
+    parser.add_argument("--end", default="2026-05-31", help="回测结束日期 (YYYY-MM-DD)")
+    parser.add_argument("--data-dir", default=str(Path.cwd()/"data/klines"), help="K线数据目录")
+    parser.add_argument("--capital", type=float, default=100000.0, help="初始资金")
+    parser.add_argument("--slippage", type=float, default=0.02, help="期权滑点比例")
+    args = parser.parse_args()
+
+    # 构建配置
+    cfg = BacktestConfig(
+        data_dir = Path(args.data_dir),
+        start_date = date.fromisoformat(args.start),
+        end_date = date.fromisoformat(args.end),
+        initial_capital = args.capital,
+        slippage_pct = args.slippage
+    )
+
+    # 执行回测与报告生成
+    engine = BacktestEngine(cfg)
+    #engine.backtest_strategy() 
+
+    results = engine.run()
+    reporter = ReportGenerator(results)
+    report_path, report_metrics = reporter.generate()
+    print(f"📄 报告已保存至: {report_path}")
+    
+    # 控制台输出核心指标
+    print("\n" + "="*50)
+    print("📊 回测核心指标")
+    print("="*50)
+    for k, v in report_metrics.items():
+        print(f"{k:<20}: {v}")
+    print("="*50)
+    '''''' 
