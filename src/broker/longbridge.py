@@ -240,7 +240,8 @@ def run_diagnostic(broker: LongbridgeAdapter, symbol: str = "QQQ.US", test_order
         # 3. 实时期权报价
         try:
             print("\n📊 [3/6] 测试期权报价 (get_quote)...")
-            op_symbol = QQQStrategy.generate_option_symbol(1.00, OrderSide.BUY)
+            current_ts = datetime.now(CONFIG["tz_et"])
+            op_symbol = QQQStrategy.generate_option_symbol(1.00, OrderSide.BUY, current_ts)
             op_quote = broker.quote_option(op_symbol)
             assert op_quote and op_quote.last_price > 0
             print(f"   ✅ PASS: {op_symbol} | Last: {op_quote.last_price} | volume: {op_quote.volume} | ts: {op_quote.timestamp}")

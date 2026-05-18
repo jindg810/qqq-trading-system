@@ -105,7 +105,8 @@ class QQQTrader:
 
     def _execute_open(self, side: str, stock_price: float):
         try:
-            symbol = QQQStrategy.generate_option_symbol(stock_price, side)
+            current_ts = datetime.now(CONFIG["tz_et"])
+            symbol = QQQStrategy.generate_option_symbol(stock_price, side, current_ts)
             if symbol is None:
                 logger.error(f"尝试失败，无法生成期权合约代码: price={stock_price}, side={side}")
                 return False
@@ -201,7 +202,9 @@ class QQQTrader:
             # 3. 盘前/盘后静默
             #if not (datetime(2000,1,1,9,30).time() <= bar["ts"].time() <= datetime(2000,1,1,16,0).time()):
              #   return
-            if not self.strategy.is_trading_hours(bar["ts"]): return
+            if not self.strategy.is_trading_hours(bar["ts"]): 
+                self._check_position_exit() # 交易时间段自定义禁止期检查仓位，如尾盘半小时平仓
+                return
 
             # 4. 风控检查：日亏损限额 & 连续止损次数
             # if not self.strategy.check_risk(): return

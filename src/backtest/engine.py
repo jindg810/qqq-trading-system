@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QQQ 0DTE 回测核心引擎 v8.1 (解耦版)
+QQQ 0DTE 回测核心引擎 v8.3
 ✅ 核心原则：
 1. 事件驱动：严格镜像实盘 trader.py 的 _on_kline 链路 (注入→风控→信号→撮合→结算)
 2. 逻辑解耦：引擎仅负责数据驱动、资金结算、报告生成；策略逻辑 100% 委托 QQQStrategy
@@ -8,6 +8,7 @@ QQQ 0DTE 回测核心引擎 v8.1 (解耦版)
 4. 成本惩罚：内置滑点与手续费模型，还原真实交易环境，杜绝回测虚高
 """
 import math
+import traceback
 
 import pandas as pd
 from pathlib import Path
@@ -30,7 +31,7 @@ class BacktestConfig:
     initial_capital: float = 100000.0
     slippage_pct: float = 0.005   # 期权滑点
     commission: float = 1.50     # 单笔手续费
-    option_price: float = 1.80
+    option_price: float = 1.00  # 初始期权价格
     max_position_size: int = field(default_factory=lambda: CONFIG.get("max_position_size", 1))
 
 @dataclass
@@ -102,6 +103,7 @@ class BacktestEngine:
                     self.equity_curve.append({"ts": bar["ts"], "equity": self.current_capital})
             except Exception as e:
                 logger.error(f"💥 K线处理异常 [{bar.get('ts')}]: {e}")
+                traceback.print_exc()
                 continue
 
         logger.info(f"🏁 回测结束 | 完成 {len(self.trades)} 笔交易")
@@ -122,7 +124,9 @@ class BacktestEngine:
         if not self.strategy.add_bar(bar): return
 
         # 3. 交易窗口过滤（盘前/盘后静默）
-        if not self.strategy.is_trading_hours(bar_ts): return
+        if not self.strategy.is_trading_hours(bar_ts): 
+            self._monitor_position
+            return
 
         # 4. 风控熔断检查（日亏损/连亏/紧急停止）
         if not self.strategy.check_risk(): return
@@ -136,16 +140,24 @@ class BacktestEngine:
     def _handle_open_signal(self, bar: Dict[str, Any]):
         """处理开仓信号"""
         sig = self.strategy.generate_signal()
+
         # 信号确认 & 频次控制
         if sig and self.strategy.trades_today < CONFIG.get("breakout_max", 8):
             stock_price = bar["close"]
             # 模拟期权入场价（基于标的价格动态估算）
-            current_time = datetime.now(CONFIG["tz_et"])
-            entry_opt = self._simulate_opt_price_v12(stock_price, sig, stock_price, bars_held=0, current_time=current_time)
+            current_time = bar["ts"]
+            option_price_at_entry = self.config.option_price
+            entry_opt = self._simulate_opt_price_v12(stock_price, sig, stock_price, 0, current_time, option_price_at_entry)
             # 🔑 应用买入滑点（买入价上浮，模拟不利成交）
             fill_price = entry_opt * (1 + self.config.slippage_pct)
 
-            symbol = QQQStrategy.generate_option_symbol(stock_price, sig)
+            # 检查可用资金
+            required_capital = fill_price * 100 * self.config.max_position_size + self.config.commission
+            if self.current_capital < required_capital:
+                logger.warning(f"💸 资金不足: 需要 ${required_capital:.2f}, 拥有 ${self.current_capital:.2f}")
+                return
+
+            symbol = QQQStrategy.generate_option_symbol(stock_price, sig, current_time)
             # 执行开仓记录
             self.strategy.open_position(sig, stock_price, fill_price, symbol, entry_ts=bar["ts"])
             # ✅ 开仓资金结算：扣除权利金 + 开仓单边手续费
@@ -158,15 +170,16 @@ class BacktestEngine:
         entry_stock = self.strategy.position["entry_stock"]
 
         # 计算当前期权理论价（未含滑点）
-        current_time = datetime.now(CONFIG["tz_et"])
+        option_price_at_entry = self.config.option_price
+        current_time = bar["ts"]
         bars_held= self.strategy.position["bars_held"]
-        base_opt_price = self._simulate_opt_price_v12(current_stock, self.strategy.position["side"], entry_stock, bars_held, current_time)
+        base_opt_price = self._simulate_opt_price_v12(current_stock, self.strategy.position["side"], entry_stock, bars_held, current_time, option_price_at_entry)
         # 🔑 应用平仓滑点（卖出价下浮）
         current_opt_price = base_opt_price * (1 - self.config.slippage_pct)
-        logger.info(f"[持仓监控] {bar['ts']} | Stock:{current_stock:.2f} | BaseOpt:{base_opt_price:.4f} | AfterSlip:{current_opt_price:.4f} | Held:{bars_held}")
+        #logger.info(f"[持仓监控] {bar['ts']} | Stock:{current_stock:.2f} | BaseOpt:{base_opt_price:.4f} | AfterSlip:{current_opt_price:.4f} | Held:{bars_held}")
     
         # 委托策略判断是否触发退出条件
-        exit_reason = self.strategy.check_position_exit(current_opt_price)
+        exit_reason = self.strategy.check_position_exit(current_opt_price, current_stock)
         if exit_reason:
             self._execute_close(exit_reason, current_opt_price)
 
@@ -174,11 +187,12 @@ class BacktestEngine:
         """
         执行平仓结算：平仓时计算盈亏，扣除平仓手续费，并记录完整 Net PnL
         """
+        bars_held = self.strategy.position.get("bars_held", 0)
         trade = self.strategy.close_position(current_opt_price)
         if not trade: return
 
+        trade["bars_held"] = bars_held
         trade["exit_reason"] = reason.value if isinstance(reason, ExitReason) else reason
-        #trade["commission"] = self.config.commission
 
         # ✅ 核心：平仓资金回流（卖出期权收回权利金 - 平仓手续费）
         capital_return = current_opt_price * 100 * self.config.max_position_size - self.config.commission
@@ -192,19 +206,19 @@ class BacktestEngine:
     def _force_close_eod(self):
         """0DTE 策略隔日强平机制，彻底阻断 bars_held 跨日累加"""
         if not self.strategy.position: return
+        symbol = self.strategy.position.get('symbol', 'UNKNOWN')
         # 按持仓入场价模拟平仓（实际可取上一根Bar的close，此处简化防滑点干扰）
-        exit_price = self.strategy.position["entry_opt"]
-        self._execute_close("EOD_FORCE", exit_price)
-        logger.debug(f"🌙 EOD强平执行: {self.strategy.position.get('symbol', 'UNKNOWN')}")
+        self._execute_close(ExitReason.EOD_FORCE, 0)  # 过期期权按 0 元退出
+        logger.debug(f"🌙 EOD强平执行: {symbol}")
     
     @staticmethod
     def _simulate_opt_price_v12(
             stock_price: float,
             side: str,
-            entry_stock: float,
+            entry_stock_price: float,
             bars_held: int = 0,
             current_time: datetime = None,
-            option_price_at_entry: float = 1.80
+            option_price_at_entry: float = None
         ) -> float:
         """
         🏆 最终验证版：经过实际演算，与专业机构数据完全一致
@@ -217,10 +231,10 @@ class BacktestEngine:
         
         包含：IV衰减、流动性枯竭、Bid-Ask Spread、Gamma凸性修正
         """
-        if entry_stock <= 0:
+        if entry_stock_price <= 0:
             return option_price_at_entry
         
-        stock_ret = (stock_price - entry_stock) / entry_stock
+        stock_ret = (stock_price - entry_stock_price) / entry_stock_price
         
         # ===== 1. 时间计算 =====
         if current_time:
@@ -264,9 +278,9 @@ class BacktestEngine:
         combined_decay = time_decay * iv_decay * liquidity_factor
         
         # ===== 5. 行权价 =====
-        strike_offset = 2.0
-        strike = entry_stock + strike_offset if side == 'call' else entry_stock - strike_offset
-        moneyness = (stock_price - strike) / entry_stock if side == 'call' else (strike - stock_price) / entry_stock
+        strike_offset = CONFIG.get("offset", 2.0)
+        strike = entry_stock_price + strike_offset if side == 'call' else entry_stock_price - strike_offset
+        moneyness = (stock_price - strike) / entry_stock_price if side == 'call' else (strike - stock_price) / entry_stock_price
         
         # ===== 6. Gamma 因子（正股不变时为1.0）=====
         gamma_factor = 1.0
@@ -298,12 +312,6 @@ class BacktestEngine:
         # ===== 10. 硬性限制 =====
         max_reasonable = option_price_at_entry * 1.2
         option_price = min(option_price, max_reasonable)
-        
-        # ===== 11. Bid-Ask Spread（入场即扣除）=====
-        spread_pct = 0.15
-        spread_cost = option_price * spread_pct * 0.5
-        option_price = max(0.01, option_price - spread_cost)
-        
         return round(option_price, 2)
 
     @staticmethod
@@ -358,7 +366,7 @@ class BacktestEngine:
             opt_price = self._simulate_opt_price_v12(
                 stock_price=stock_price,
                 side='call',
-                entry_stock=entry_price,
+                entry_stock_price=entry_price,
                 bars_held=bar_num,  # 经过的K线数
                 current_time=current_time,
                 option_price_at_entry=option_entry
@@ -374,7 +382,7 @@ class BacktestEngine:
             opt_price = self._simulate_opt_price_v12(
                 stock_price=stock_price,
                 side='call',
-                entry_stock=entry_price,
+                entry_stock_price=entry_price,
                 bars_held=bar_num,
                 current_time=current_time,
                 option_price_at_entry=option_entry

@@ -77,23 +77,27 @@ class ReportGenerator:
         }
 
     def _render_html(self, metrics: dict) -> Path:
-        env = Environment(loader=FileSystemLoader(self.template_dir))
-        template = env.get_template("backtest_report.html")
-        
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        html_path = self.output_dir / f"report_{ts}.html"
-        
-        # 注入 Chart.js 所需数据
-        equity_json = self.equity_df.to_json(orient="records", date_format="iso") if not self.equity_df.empty else "[]"
-        
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(template.render(
-                metrics=metrics,
-                trades=self.trades_df.to_dict(orient="records"),
-                equity_json=equity_json,
-                generated_at=datetime.now().strftime("%Y-%m-%d %H:%M")
-            ))
-        return html_path
+        try:
+            env = Environment(loader=FileSystemLoader(self.template_dir))
+            template = env.get_template("backtest_report.html")
+            
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            html_path = self.output_dir / f"report_{ts}.html"
+            
+            # 注入 Chart.js 所需数据
+            equity_json = self.equity_df.to_json(orient="records", date_format="iso") if not self.equity_df.empty else "[]"
+            
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(template.render(
+                    metrics=metrics,
+                    trades=self.trades_df.to_dict(orient="records"),
+                    equity_json=equity_json,
+                    generated_at=datetime.now().strftime("%Y-%m-%d %H:%M")
+                ))
+            return html_path
+        except Exception as ex:
+            logger.error(f"_render_html error: {ex}")
+            return None
 
     def _save_csv(self):
         if not self.trades_df.empty:

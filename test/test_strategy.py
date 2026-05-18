@@ -144,6 +144,7 @@ class TestPositionManagement:
         assert trade["pnl"] == -0.2 and self.strat.consecutive_losses == 1
     
     def test_generate_symbol(self):
-        sym = QQQStrategy.generate_option_symbol(450.12, "call")
+        current_ts = datetime.now(CONFIG["tz_et"])
+        sym = QQQStrategy.generate_option_symbol(450.12, "call", current_ts)
         assert sym.startswith("QQQ") and sym.endswith(".US") and "C" in sym
-        assert QQQStrategy.generate_option_symbol(0, "call") is None
+        assert QQQStrategy.generate_option_symbol(0, "call", current_ts) is None

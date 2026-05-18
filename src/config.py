@@ -53,8 +53,9 @@ STRATEGY_CONFIG = {
     "reversal_max": 1,  # 反转最大持仓数量
     "sl_pct": 0.25,  # 止损百分比
     "tp_half": 1.0,  # 盈亏比达到1倍时止盈一半
-    "trail_pct": 0.3,  # 盈亏比达到0.3倍时开始移动止损
-    "timeout_bars": 15, # 持仓超过15根K线时强制退出
+    "trail_activate": 0.05, # 移动止损激活阈值 5%
+    "trail_pct": 0.15,  # 盈亏比达到50%时，回撤 15% 开始移动止损
+    "timeout_bars": 60, # 持仓超过15根K线时强制退出
     "offset": 2.0,
 }
 

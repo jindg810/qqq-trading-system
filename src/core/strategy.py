@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QQQ 0DTE 核心策略模块
+QQQ 0DTE 核心策略模块 v8.3
 ✅ 纯数学/状态逻辑，不依赖长桥 SDK / 文件系统 / 网络
 ✅ 实盘与回测 100% 共用，修改一处全局生效
 """
@@ -19,6 +19,8 @@ class ExitReason(StrEnum):
     TAKE_PROFIT = "TAKE_PROFIT" # 止盈
     TRAILING_STOP = "TRAILING_STOP" # 移动止损
     TIMEOUT = "TIMEOUT" # 时间止损（持仓超过预设周期）
+    GAMMA_RISK = "GAMMA_RISK"
+    EOD_FORCE = "EOD_FORCE"
     
 class QQQStrategy:
     def __init__(self):
@@ -68,6 +70,7 @@ class QQQStrategy:
     
     # ================= 信号检测 =================
     def is_trading_hours(self, raw_ts: Optional[datetime] = None) -> bool: 
+        ''' 开盘 5 分钟，收盘前 30 分钟不交易 '''
         if raw_ts is None:
             bar_ts = datetime.now(CONFIG["tz_et"])
         elif isinstance(raw_ts, (int, float)):
@@ -80,9 +83,9 @@ class QQQStrategy:
             bar_ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(CONFIG["tz_et"])
             if bar_ts.weekday() >= 5: return False
 
-        market_open = bar_ts.replace(hour=9, minute=30, second=0, microsecond=0)
-        market_close = bar_ts.replace(hour=16, minute=0, second=0, microsecond=0)
-        return market_open <= bar_ts <= market_close
+        market_open = bar_ts.replace(hour=9, minute=35, second=0, microsecond=0)
+        market_close = bar_ts.replace(hour=15, minute=30, second=0, microsecond=0)
+        return market_open <= bar_ts < market_close
     
     def generate_signal(self) -> Optional[str]:
         if len(self.bars) < 2: return None
@@ -114,15 +117,19 @@ class QQQStrategy:
         """成交量必须满足：当前K线成交量 >= 最近20根K线平均成交量 * vol_mult"""
         cnt = len(self.sma20_vol)
         if cnt == 0: return False
-        # 不足20根时动态提高门槛，上限1.5倍
+        # 不足20根时动态提高门槛，上限1倍
         if cnt < 20:
-            dynamic_mult = min(CONFIG["vol_mult"] * (20 / cnt), 1.5)
+            dynamic_mult = min(CONFIG["vol_mult"] * (20 / cnt), 1)
             avg_vol = sum(self.sma20_vol) / cnt
-            return self.bars[-1]["volume"] >= avg_vol * dynamic_mult
+            is_ok = self.bars[-1]["volume"] >= avg_vol * dynamic_mult
+            if is_ok: logger.info(f"valume_ok: {self.bars[-1]['ts']} -> {self.bars[-1]['volume']} >= {avg_vol * dynamic_mult}")
+            return is_ok
         
         # 满20根后使用标准逻辑
         avg_vol = sum(self.sma20_vol) / 20
-        return self.bars[-1]["volume"] >= avg_vol * CONFIG["vol_mult"]
+        is_ok = self.bars[-1]["volume"] >= avg_vol * CONFIG["vol_mult"]
+        #if is_ok: logger.info(f"valume_ok: {self.bars[-1]['ts']} -> {self.bars[-1]['volume']} >= {avg_vol * CONFIG['vol_mult']}")
+        return is_ok
 
     def _breakout_signal(self) -> Optional[str]:
         """
@@ -161,8 +168,10 @@ class QQQStrategy:
         3. 当前K线为阳线（看涨）或阴线（看跌）
         """
         if last["close"] > upper and last["close"] > sma and last["close"] > last["open"]:
+            #logger.info(f"✅ breakout Call({last['ts']}) -> {last['close']} > {upper}, {last['close']} > {sma}, {last['close']} > {last['open']}")
             return "call"
         if last["close"] < lower and last["close"] < sma and last["close"] < last["open"]:
+            #logger.info(f"✅ breakout Put({last['ts']}) -> {last['close']} < {lower}, {last['close']} < {sma}, {last['close']} < {last['open']}")
             return "put"
         return None
 
@@ -181,14 +190,16 @@ class QQQStrategy:
         max_h, min_l = max(highs), min(lows)
         if max_h > 0 and last["close"] < last["open"] and (max_h - last["close"]) / max_h >= drop_thresh:
             # 看跌反转: 从高点回落 >=0.2% 且收阴
+            #logger.info(f"✅ reversal Put({last['ts']}) -> {last['close']} < {last['open']}, {(max_h - last['close']) / max_h} >= {drop_thresh}")
             return "put"
         if min_l > 0 and last["close"] > last["open"] and (last["close"] - min_l) / min_l >= drop_thresh:
             # 看涨反转: 从低点反弹 >=0.2% 且收阳
+            #logger.info(f"✅ reversal Call({last['ts']}) -> {last['close']} > {last['open']}, {(last['close'] - min_l) / min_l} >= {drop_thresh}")
             return "call"
         return None
 
     # ================= 持仓动态管理 =================
-    def check_position_exit(self, current_opt_price: float) -> Optional[str]:
+    def check_position_exit1(self, current_opt_price: float) -> Optional[str]:
         """检查持仓退出条件，返回退出原因或 None"""
         if not self.position: return None
         entry_opt = self.position["entry_opt"]
@@ -197,21 +208,98 @@ class QQQStrategy:
         self.position["peak_pnl"] = peak
 
         # 止损：亏损达到预设百分比（如25%）立即止损
-        if pnl_pct <= -CONFIG.get("sl_pct", 0.25): return ExitReason.STOP_LOSS
+        if pnl_pct <= -CONFIG.get("sl_pct", 0.15): 
+            print(f"peak: {peak}, ({current_opt_price:.4f} - {entry_opt:.4f})/{entry_opt:.4f} = {pnl_pct:.4f}")
+            return ExitReason.STOP_LOSS
         # 止盈：盈亏比达到1倍时止盈全部，达到0.5倍时止盈一半（可选）
         if peak >= CONFIG.get("tp_half", 1.0): return ExitReason.TAKE_PROFIT
         # 移动止损：盈亏比达到0.3倍时开始移动止损，保护盈利回撤不超过0.3倍
-        if peak > 0 and (peak - pnl_pct) >= CONFIG.get("trail_pct", 0.30): return ExitReason.TRAILING_STOP
+        if peak > 0.05 and (peak - pnl_pct) >= CONFIG.get("trail_pct", 0.15): return ExitReason.TRAILING_STOP
         
         self.position["bars_held"] = self.position.get("bars_held", 0) + 1
-        if self.position["bars_held"] >= CONFIG.get("timeout_bars", 15): return ExitReason.TIMEOUT
+        if self.position["bars_held"] >= CONFIG.get("timeout_bars", 45): return ExitReason.TIMEOUT
         return None
 
-    def open_position(self, side: str, entry_stock: float, entry_opt: float, symbol: str):
+    def check_position_exit(self, current_opt_price: float, current_stock: float) -> Optional[ExitReason]:
+        if not self.position: return None
+        
+        entry_opt = self.position["entry_opt"]
+        side = self.position["side"]
+        
+        # 1. 计算当前盈亏比例
+        current_pnl_pct = (current_opt_price - entry_opt) / entry_opt
+        #if side == "put":
+        #    current_pnl_pct = -current_pnl_pct  # Put 盈亏反向
+        
+        # 2. 更新峰值盈亏（记录最高盈利）
+        peak_pnl = self.position.get("peak_pnl", 0)
+        if current_pnl_pct > peak_pnl:
+            self.position["peak_pnl"] = current_pnl_pct
+            peak_pnl = current_pnl_pct
+        
+        # 3. 固定止损（期权价格层面）
+        sl_threshold = CONFIG.get("sl_pct", 0.15)  # 例如 0.15 = 15%
+        if current_pnl_pct <= -sl_threshold:
+            logger.info(f"📉 固定止损触发: 止损阈值={sl_threshold:.1%}, 当前={current_pnl_pct:.1%}")
+            return ExitReason.STOP_LOSS
+        
+        # 4. 固定止盈
+        tp_threshold = CONFIG.get("tp_half", 1.0)  # 例如 1.0, 即 1 倍
+        if current_pnl_pct >= tp_threshold:
+            return ExitReason.TAKE_PROFIT
+        
+        # 5. 移动止损（核心修复）
+        trail_activate = CONFIG.get("trail_activate", 0.05)  # 激活阈值 5%
+        trail_drop = CONFIG.get("trail_pct", 0.15)  # 回撤比例 15%
+        
+        if peak_pnl > trail_activate:
+            # ✅ 正确计算回撤比例
+            drawdown = (peak_pnl - current_pnl_pct) / peak_pnl
+            if drawdown >= trail_drop:
+                logger.info(f"📉 移动止损触发: 峰值={peak_pnl:.1%}, 当前={current_pnl_pct:.1%}, 回撤={drawdown:.1%}")
+                return ExitReason.TRAILING_STOP
+        
+        # 6. 时间止损
+        self.position["bars_held"] = self.position.get("bars_held", 0) + 1
+        bars_held = self.position["bars_held"]
+        max_bars = CONFIG.get("timeout_bars", 60)  # 最多持仓60分钟
+        if bars_held >= max_bars:
+            logger.info(f"超时平仓触发：bars_held={bars_held}, 最多持仓={max_bars}")
+            return ExitReason.TIMEOUT
+        
+        # 7. Gamma 风险检查
+        if self.check_gamma_risk(current_stock):
+            return ExitReason.GAMMA_RISK
+        
+        return None
+
+    def check_gamma_risk(self, current_stock: float) -> bool:
+        if not self.position: return False
+        strike_offset = CONFIG.get("offset", 2.0)
+        entry_stock = self.position["entry_stock"]
+        side = self.position["side"]
+        
+        # 计算开仓时的实际行权价
+        strike = round(entry_stock + strike_offset) if side == "call" else round(entry_stock - strike_offset)
+        
+        # 计算当前价与行权价的距离百分比
+        distance_pct = abs(current_stock - strike) / strike
+        # 仅当距离非常近（例如0.1%）时，进一步判断方向
+        if distance_pct < 0.001:  # 进入极危险区
+            if side == "call":
+                # 做多Call的风险：正股价格跌到行权价附近
+                if current_stock <= strike:  return True
+            elif side == "put":
+                # 做多Put的风险：正股价格涨到行权价附近
+                if current_stock >= strike: return True
+        return False
+
+    def open_position(self, side: str, entry_stock: float, entry_opt: float, symbol: str, entry_ts: datetime=None):
         """记录开仓状态"""
         self.position = {
             "side": side, "symbol": symbol,
             "entry_stock": entry_stock, "entry_opt": entry_opt,
+            "entry_ts": entry_ts,
             "peak_pnl": 0.0, # 盈亏比峰值（移动止损基准）
             "bars_held": 0 # 持仓周期计数器（用于时间止损）
         }
@@ -232,14 +320,14 @@ class QQQStrategy:
         return trade
 
     @staticmethod
-    def generate_option_symbol(price: float, side: str) -> str:
+    def generate_option_symbol(price: float, side: str, current_ts: datetime) -> str:
         """生成0DTE期权合约代码（纯函数）"""
         if price <= 0: return None
 
         # 期权行权价​根据标的价格和偏移量计算，向上取整（看涨）或向下取整（看跌），单位为0.01美元
         # 期权行权价 = 距离现货 ±2 美元的 0DTE 虚值期权行权价
         strike = round(price + CONFIG["offset"]) if side == "call" else round(price - CONFIG["offset"])
-        exp = datetime.now(CONFIG["tz_et"]).strftime("%y%m%d")
+        exp = current_ts.strftime("%y%m%d")
         otype = "C" if side == "call" else "P"
         return f"QQQ{exp}{otype}{strike * 1000:06d}.US"
     

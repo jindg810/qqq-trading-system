@@ -3,56 +3,106 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QQQ 0DTE v6.1 回测报告</title>
+    <title>QQQ 0DTE 量化回测报告</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        :root { --bg: #0f172a; --card: #1e293b; --text: #e2e8f0; --accent: #38bdf8; --win: #22c55e; --loss: #ef4444; }
-        body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; margin: 0; padding: 2rem; }
+        :root { --bg: #f8f9fa; --card: #ffffff; --text: #2d3436; --accent: #0984e3; --green: #00b894; --red: #d63031; --border: #dfe6e9; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
         .container { max-width: 1200px; margin: 0 auto; }
-        h1 { color: var(--accent); border-bottom: 2px solid var(--card); padding-bottom: 0.5rem; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin: 2rem 0; }
-        .card { background: var(--card); padding: 1.5rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-        .metric { font-size: 1.8rem; font-weight: bold; margin: 0.5rem 0; }
-        .win { color: var(--win); } .loss { color: var(--loss); }
-        table { width: 100%; border-collapse: collapse; margin-top: 2rem; background: var(--card); }
-        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #334155; }
-        th { background: #0f172a; color: var(--accent); }
-        .badge { padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.85rem; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .header h1 { margin: 0; font-size: 28px; color: var(--accent); }
+        .header p { color: #636e72; margin: 5px 0 0; }
+        
+        .dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 15px; margin-bottom: 30px; }
+        .card { background: var(--card); padding: 15px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); text-align: center; }
+        .card .label { font-size: 13px; color: #636e72; margin-bottom: 5px; }
+        .card .value { font-size: 22px; font-weight: 700; }
+        .value.pos { color: var(--green); } .value.neg { color: var(--red); }
+        
+        .chart-container { background: var(--card); padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 30px; }
+        .table-container { background: var(--card); padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th, td { padding: 12px 10px; border-bottom: 1px solid var(--border); text-align: center; }
+        th { background: #f1f2f6; font-weight: 600; color: #636e72; }
+        tr:hover { background: #f8f9fa; }
+        .footer { text-align: center; margin-top: 40px; color: #b2bec3; font-size: 12px; }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>📊 QQQ 0DTE v6.1 回测报告</h1>
-    
-    <div class="grid">
-        <div class="card"><h3>总交易数</h3><div class="metric">{{ metrics.total_trades }} 笔</div></div>
-        <div class="card"><h3>胜率</h3><div class="metric {% if metrics.win_rate >= 0.6 %}win{% else %}loss{% endif %}">{{ "%.1f"|format(metrics.win_rate*100) }}%</div></div>
-        <div class="card"><h3>总收益率</h3><div class="metric {% if metrics.total_return >= 0 %}win{% else %}loss{% endif %}">{{ "%.2f"|format(metrics.total_return) }}%</div></div>
-        <div class="card"><h3>盈亏比 (PF)</h3><div class="metric">{{ "%.2f"|format(metrics.profit_factor) }}</div></div>
+    <div class="header">
+        <h1>📊 QQQ 0DTE 量化回测报告</h1>
+        <p>生成时间: {{ generated_at }} | 数据区间: {{ metrics.period | default('全量') }}</p>
     </div>
 
-    <div class="grid">
-        <div class="card"><h3>平均盈利/亏损</h3><div class="metric">+{{ "%.2f"|format(metrics.avg_win_pct) }}% / {{ "%.2f"|format(metrics.avg_loss_pct) }}%</div></div>
-        <div class="card"><h3>最大连续亏损</h3><div class="metric loss">{{ metrics.max_cons_losses }} 次</div></div>
-        <div class="card"><h3>平均持仓</h3><div class="metric">{{ "%.1f"|format(metrics.avg_bars) }} 根K线</div></div>
-        <div class="card"><h3>退出分布</h3><ul>{% for k,v in metrics.exit_dist.items() %}<li>{{ k }}: {{ "%.1f"|format(v*100) }}%</li>{% endfor %}</ul></div>
+    <!-- 核心指标面板 -->
+    <div class="dashboard">
+        <div class="card"><div class="label">总交易数</div><div class="value">{{ metrics.total_trades }}</div></div>
+        <div class="card"><div class="label">胜率</div><div class="value pos">{{ "%.1f"|format(metrics.win_rate*100) }}%</div></div>
+        <div class="card"><div class="label">总收益率</div><div class="value {{ 'pos' if metrics.total_return > 0 else 'neg' }}">{{ "%.2f"|format(metrics.total_return) }}%</div></div>
+        <div class="card"><div class="label">盈亏比 (PF)</div><div class="value">{{ "%.2f"|format(metrics.profit_factor) }}</div></div>
+        <div class="card"><div class="label">夏普比率</div><div class="value">{{ "%.2f"|format(metrics.sharpe_ratio) }}</div></div>
+        <div class="card"><div class="label">最大回撤</div><div class="value neg">-{{ "%.2f"|format(metrics.max_drawdown) }}%</div></div>
     </div>
 
-    <h2>📜 交易明细 (前 20 笔)</h2>
-    <table>
-        <thead><tr><th>入场时间</th><th>方向</th><th>入场价</th><th>出场价</th><th>盈亏%</th><th>退出原因</th></tr></thead>
-        <tbody>
+    <!-- 权益曲线图 -->
+    <div class="chart-container">
+        <canvas id="equityChart" height="100"></canvas>
+    </div>
+
+    <!-- 交易明细表 -->
+    <div class="table-container">
+        <h3>📜 交易明细 (Top 20)</h3>
+        <table>
+            <thead>
+                <tr><th>入场时间</th><th>出场时间</th><th>方向</th><th>入场价</th><th>出场价</th><th>盈亏($)</th><th>盈亏%</th><th>退出原因</th></tr>
+            </thead>
+            <tbody>
             {% for t in trades[:20] %}
-            <tr>
-                <td>{{ t.entry_ts.strftime('%Y-%m-%d %H:%M') }}</td>
-                <td><span class="badge" style="background:{{ '#0ea5e9' if t.side=='call' else '#8b5cf6' }}">{{ t.side.upper() }}</span></td>
-                <td>${{ "%.4f"|format(t.entry_opt) }}</td>
-                <td>${{ "%.4f"|format(t.exit_opt) }}</td>
-                <td class="{{ 'win' if t.pnl>0 else 'loss' }}">{{ "%.2f"|format(t.pnl_pct*100) }}%</td>
-                <td>{{ t.exit_reason }}</td>
-            </tr>
+                <tr>
+                    <td>{{ t.entry_ts.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td>{{ t.exit_ts.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td style="color: {{ 'var(--green)' if t.side=='call' else 'var(--red)' }}">{{ t.side|upper }}</td>
+                    <td>${{ "%.4f"|format(t.entry_opt) }}</td>
+                    <td>${{ "%.4f"|format(t.exit_opt) }}</td>
+                    <td style="color: {{ 'var(--green)' if t.pnl > 0 else 'var(--red)' }}">+${{ "%.2f"|format(t.pnl) }}</td>
+                    <td>{{ "%.2f"|format((t.exit_opt - t.entry_opt)/t.entry_opt*100) }}%</td>
+                    <td>{{ t.exit_reason }}</td>
+                </tr>
             {% endfor %}
-        </tbody>
-    </table>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="footer">Generated by QQQ Trading System v8.0 | Institutional Backtest Engine</div>
 </div>
+
+<script>
+    const data = {{ equity_json | safe }};
+    if(data.length > 0) {
+        const ctx = document.getElementById('equityChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: data.map(d => d.ts.substring(0, 10)),
+                datasets: [{
+                    label: '账户权益 (USD)',
+                    data: data.map(d => d.equity),
+                    borderColor: '#0984e3',
+                    backgroundColor: 'rgba(9, 132, 227, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: { x: { grid: { display: false } }, y: { grid: { color: '#f1f2f6' } } }
+            }
+        });
+    }
+</script>
 </body>
 </html>
