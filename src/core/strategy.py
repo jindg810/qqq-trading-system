@@ -70,7 +70,7 @@ class QQQStrategy:
     
     # ================= 信号检测 =================
     def is_trading_hours(self, raw_ts: Optional[datetime] = None) -> bool: 
-        ''' 开盘 5 分钟，收盘前 30 分钟不交易 '''
+        ''' 开盘 1 分钟，收盘前 30 分钟不交易 '''
         if raw_ts is None:
             bar_ts = datetime.now(CONFIG["tz_et"])
         elif isinstance(raw_ts, (int, float)):
@@ -83,7 +83,7 @@ class QQQStrategy:
             bar_ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(CONFIG["tz_et"])
             if bar_ts.weekday() >= 5: return False
 
-        market_open = bar_ts.replace(hour=9, minute=35, second=0, microsecond=0)
+        market_open = bar_ts.replace(hour=9, minute=31, second=0, microsecond=0)
         market_close = bar_ts.replace(hour=15, minute=30, second=0, microsecond=0)
         return market_open <= bar_ts < market_close
     
@@ -117,12 +117,15 @@ class QQQStrategy:
         """成交量必须满足：当前K线成交量 >= 最近20根K线平均成交量 * vol_mult"""
         cnt = len(self.sma20_vol)
         if cnt == 0: return False
-        # 不足20根时动态提高门槛，上限1倍
+        
         if cnt < 20:
+            # 不足20根时动态提高门槛，上限1倍
+            base_volume = 80000
+            curr_volume = self.bars[-1]["volume"]
             dynamic_mult = min(CONFIG["vol_mult"] * (20 / cnt), 1)
             avg_vol = sum(self.sma20_vol) / cnt
-            is_ok = self.bars[-1]["volume"] >= avg_vol * dynamic_mult
-            if is_ok: logger.info(f"valume_ok: {self.bars[-1]['ts']} -> {self.bars[-1]['volume']} >= {avg_vol * dynamic_mult}")
+            is_ok = curr_volume >=base_volume and curr_volume >= avg_vol * dynamic_mult
+            #if is_ok: logger.info(f"valume_ok: {self.bars[-1]['ts']} -> {self.bars[-1]['volume']} >= {avg_vol * dynamic_mult}")
             return is_ok
         
         # 满20根后使用标准逻辑
@@ -314,6 +317,7 @@ class QQQStrategy:
         trade = {
             **self.position, "exit_opt": round(exit_opt, 4),
             "pnl": round(pnl, 4), "pnl_pct": round(pnl / self.position["entry_opt"], 4),
+            "exit_stock": self.bars[-1].get("close") if self.bars else None,
             "exit_ts": self.bars[-1].get("ts") if self.bars else None
         }
         self.position = None

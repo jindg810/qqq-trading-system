@@ -55,16 +55,17 @@
         <h3>📜 交易明细 (Top 20)</h3>
         <table>
             <thead>
-                <tr><th>入场时间</th><th>出场时间</th><th>方向</th><th>入场价</th><th>出场价</th><th>盈亏($)</th><th>盈亏%</th><th>退出原因</th></tr>
+                <tr><th>期权</th><th>入场时间</th><th>出场时间</th><th>方向</th><th>入场价</th><th>出场价</th><th>盈亏($)</th><th>盈亏%</th><th>退出原因</th></tr>
             </thead>
             <tbody>
             {% for t in trades[:20] %}
                 <tr>
+                    <td>{{ t.symbol }}</td>
                     <td>{{ t.entry_ts.strftime('%Y-%m-%d %H:%M') }}</td>
                     <td>{{ t.exit_ts.strftime('%Y-%m-%d %H:%M') }}</td>
                     <td style="color: {{ 'var(--green)' if t.side=='call' else 'var(--red)' }}">{{ t.side|upper }}</td>
-                    <td>${{ "%.4f"|format(t.entry_opt) }}</td>
-                    <td>${{ "%.4f"|format(t.exit_opt) }}</td>
+                    <td>${{ "%.4f"|format(t.entry_opt) }} / ${{ "%.4f"|format(t.exit_opt) }}</td>
+                    <td>${{ "%.4f"|format(t.entry_stock) }} / ${{ "%.4f"|format(t.exit_stock) }}</td>
                     <td style="color: {{ 'var(--green)' if t.pnl > 0 else 'var(--red)' }}">+${{ "%.2f"|format(t.pnl) }}</td>
                     <td>{{ "%.2f"|format((t.exit_opt - t.entry_opt)/t.entry_opt*100) }}%</td>
                     <td>{{ t.exit_reason }}</td>

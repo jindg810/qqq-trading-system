@@ -12,9 +12,10 @@ import traceback
 
 import pandas as pd
 from pathlib import Path
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
+from src.backtest.option_provider import OptionPriceProvider
 from src.core.strategy import ExitReason, QQQStrategy
 from src.config import CONFIG
 from src.logger import get_logger
@@ -30,8 +31,8 @@ class BacktestConfig:
     end_date: Optional[date] = date(2026, 4, 30)
     initial_capital: float = 100000.0
     slippage_pct: float = 0.005   # 期权滑点
-    commission: float = 1.50     # 单笔手续费
-    option_price: float = 1.00  # 初始期权价格
+    commission: float = 2.00     # 单笔手续费
+    #option_price: float = 1.50  # 初始期权价格
     max_position_size: int = field(default_factory=lambda: CONFIG.get("max_position_size", 1))
 
 @dataclass
@@ -89,6 +90,7 @@ class BacktestEngine:
         self.current_capital = config.initial_capital
         self._current_date: Optional[date] = None
         self.data_loader = DataLoader(config)
+        self.opt_provider = OptionPriceProvider()
 
     def run(self) -> BacktestResult:
         bars = self.data_loader.load_bars()
@@ -122,32 +124,37 @@ class BacktestEngine:
 
         # 2. 优先注入 K 线：确保 SMA/Volume 等指标连续计算，不被过滤切断
         if not self.strategy.add_bar(bar): return
-
-        # 3. 交易窗口过滤（盘前/盘后静默）
-        if not self.strategy.is_trading_hours(bar_ts): 
-            self._monitor_position
-            return
-
-        # 4. 风控熔断检查（日亏损/连亏/紧急停止）
-        if not self.strategy.check_risk(): return
-
-        # 5. 信号与持仓管理（严格对齐实盘逻辑）
-        if not self.strategy.position:
-            self._handle_open_signal(bar)
-        else:
+        
+        if self.strategy.position:
+            # 3. 仓位管理
             self._monitor_position(bar)
+        else:
+            # 4. 处理开仓信号
+            self._handle_open_signal(bar)
+
 
     def _handle_open_signal(self, bar: Dict[str, Any]):
         """处理开仓信号"""
-        sig = self.strategy.generate_signal()
-
+        if self.strategy.position or not self.strategy.check_risk() \
+            or not self.strategy.is_trading_hours(bar["ts"]): 
+            # 已开仓 or 风控熔断（日亏损/连亏/紧急停止） or 禁止交易时间
+            # 忽略开仓信号
+            return 
+        
         # 信号确认 & 频次控制
+        sig = self.strategy.generate_signal()
         if sig and self.strategy.trades_today < CONFIG.get("breakout_max", 8):
             stock_price = bar["close"]
             # 模拟期权入场价（基于标的价格动态估算）
             current_time = bar["ts"]
-            option_price_at_entry = self.config.option_price
-            entry_opt = self._simulate_opt_price_v12(stock_price, sig, stock_price, 0, current_time, option_price_at_entry)
+            symbol = QQQStrategy.generate_option_symbol(stock_price, sig, current_time)
+            #option_price_at_entry = self.config.option_price
+            #entry_opt = self._simulate_opt_price_v12(stock_price, sig, stock_price, 0, current_time, option_price_at_entry)
+            entry_opt = self.opt_provider.get_price(current_time, symbol)
+            if entry_opt is None:
+                logger.warning(f"💥 Invalid option price. {symbol}, ts={current_time}")
+                return
+            
             # 🔑 应用买入滑点（买入价上浮，模拟不利成交）
             fill_price = entry_opt * (1 + self.config.slippage_pct)
 
@@ -156,8 +163,7 @@ class BacktestEngine:
             if self.current_capital < required_capital:
                 logger.warning(f"💸 资金不足: 需要 ${required_capital:.2f}, 拥有 ${self.current_capital:.2f}")
                 return
-
-            symbol = QQQStrategy.generate_option_symbol(stock_price, sig, current_time)
+            
             # 执行开仓记录
             self.strategy.open_position(sig, stock_price, fill_price, symbol, entry_ts=bar["ts"])
             # ✅ 开仓资金结算：扣除权利金 + 开仓单边手续费
@@ -170,10 +176,17 @@ class BacktestEngine:
         entry_stock = self.strategy.position["entry_stock"]
 
         # 计算当前期权理论价（未含滑点）
-        option_price_at_entry = self.config.option_price
-        current_time = bar["ts"]
-        bars_held= self.strategy.position["bars_held"]
-        base_opt_price = self._simulate_opt_price_v12(current_stock, self.strategy.position["side"], entry_stock, bars_held, current_time, option_price_at_entry)
+        #option_price_at_entry = self.config.option_price
+        #current_time = bar["ts"]
+        #bars_held= self.strategy.position["bars_held"]
+        #base_opt_price = self._simulate_opt_price_v12(current_stock, self.strategy.position["side"], entry_stock, bars_held, current_time, option_price_at_entry)
+        symbol = self.strategy.position["symbol"]
+        # 🔑 优先获取真实历史价格
+        base_opt_price = self.opt_provider.get_price(bar["ts"], symbol)
+        if base_opt_price is None:
+            logger.warning(f"💥 invalid option price. {symbol}, ts={bar['ts']}");
+            return
+
         # 🔑 应用平仓滑点（卖出价下浮）
         current_opt_price = base_opt_price * (1 - self.config.slippage_pct)
         #logger.info(f"[持仓监控] {bar['ts']} | Stock:{current_stock:.2f} | BaseOpt:{base_opt_price:.4f} | AfterSlip:{current_opt_price:.4f} | Held:{bars_held}")
@@ -201,6 +214,7 @@ class BacktestEngine:
         # ✅ trade["pnl"] 记录该笔交易的真实净盈亏（已隐含开平双边手续费）
         trade["pnl"] = (current_opt_price - trade["entry_opt"]) * 100 * self.config.max_position_size - 2 * self.config.commission
         trade["pnl_pct"] = trade["pnl"] / (trade["entry_opt"] * 100 * self.config.max_position_size) if trade["entry_opt"] > 0 else 0
+        #print(f"{trade}")
         self.trades.append(trade)
 
     def _force_close_eod(self):
@@ -218,7 +232,7 @@ class BacktestEngine:
             entry_stock_price: float,
             bars_held: int = 0,
             current_time: datetime = None,
-            option_price_at_entry: float = None
+            entry_opt_price: float = None
         ) -> float:
         """
         🏆 最终验证版：经过实际演算，与专业机构数据完全一致
@@ -231,88 +245,61 @@ class BacktestEngine:
         
         包含：IV衰减、流动性枯竭、Bid-Ask Spread、Gamma凸性修正
         """
-        if entry_stock_price <= 0:
-            return option_price_at_entry
+        """0DTE 期权价格模拟（机构校准版）"""
+        if entry_stock_price <= 0 or entry_opt_price is None:
+            return entry_opt_price if entry_opt_price is not None else 0.80
         
-        stock_ret = (stock_price - entry_stock_price) / entry_stock_price
-        
-        # ===== 1. 时间计算 =====
+        tz = CONFIG.get("tz_et", timezone(timedelta(hours=-5)))
         if current_time:
+            current_time = current_time.astimezone(tz) if current_time.tzinfo else current_time.replace(tzinfo=tz)
             market_open = current_time.replace(hour=9, minute=30, second=0, microsecond=0)
-            market_close = current_time.replace(hour=16, minute=0, second=0, microsecond=0)
-            
-            if current_time < market_open:
-                minutes_held = 0
-                total_minutes = 390
-            elif current_time >= market_close:
-                minutes_held = 390
-                total_minutes = 390
-            else:
-                minutes_held = max(0, (current_time - market_open).seconds // 60)
-                total_minutes = 390
+            minutes_held = max(0, min(390, int((current_time - market_open).total_seconds() // 60)))
         else:
             minutes_held = bars_held
-            total_minutes = 390
         
-        time_ratio = max(0, 1 - minutes_held / total_minutes)
+        time_ratio = max(0.0, min(1.0, 1 - minutes_held / 390))
+        
+        # 平滑时间衰减（指数拟合）
+        a, b, c = 0.1, 0.9, -1.8
+        time_decay = a + b * math.exp(c * (1 - time_ratio))
+        time_decay = max(0.05, min(1.0, time_decay))
+        
+        # IV & 流动性衰减
         hours_held = minutes_held / 60
+        iv_decay = max(0.4, 1 - 0.012 * hours_held)
+        liquidity = 1.0 if time_ratio > 0.1 else 0.7 + 0.3 * (time_ratio / 0.1)
+        combined_decay = time_decay * iv_decay * liquidity
         
-        # ===== 2. 时间衰减（分段线性，已校准）=====
-        if time_ratio > 0.5:  # 前3小时：缓慢衰减
-            time_decay = 0.70 + 0.30 * (time_ratio - 0.5) / 0.5
-        elif time_ratio > 0.25:  # 3-4.5小时：加速衰减
-            time_decay = 0.40 + 0.30 * (time_ratio - 0.25) / 0.25
-        elif time_ratio > 0.05:  # 4.5-5.5小时：继续加速
-            time_decay = 0.10 + 0.30 * (time_ratio - 0.05) / 0.20
-        else:  # 最后30分钟：断崖式下跌
-            time_decay = 0.10 * (time_ratio / 0.05)
-        
-        # ===== 3. IV 衰减 =====
-        iv_decay = max(0.4, 1 - 0.015 * hours_held)
-        
-        # ===== 4. 流动性枯竭 =====
-        liquidity_factor = 1.0
-        if time_ratio < 0.1:
-            liquidity_factor = 0.7 + 0.3 * (time_ratio / 0.1)
-        
-        combined_decay = time_decay * iv_decay * liquidity_factor
-        
-        # ===== 5. 行权价 =====
+        # Moneyness 计算
         strike_offset = CONFIG.get("offset", 2.0)
         strike = entry_stock_price + strike_offset if side == 'call' else entry_stock_price - strike_offset
-        moneyness = (stock_price - strike) / entry_stock_price if side == 'call' else (strike - stock_price) / entry_stock_price
+        moneyness = (stock_price - strike) / strike if side == 'call' else (strike - stock_price) / strike
         
-        # ===== 6. Gamma 因子（正股不变时为1.0）=====
+        # Gamma 因子
+        stock_ret = (stock_price - entry_stock_price) / entry_stock_price
+        gamma_width = 0.0025
+        gamma_peak = 1.4
         gamma_factor = 1.0
+        if abs(moneyness) < gamma_width * 3:
+            gamma_factor = 1.0 + (gamma_peak - 1.0) * math.exp(-(moneyness ** 2) / (2 * gamma_width ** 2))
+        
+        # 期权定价
+        entry_intrinsic = max(0, entry_stock_price - strike) if side == 'call' else max(0, strike - entry_stock_price)
+        initial_tv = max(0, entry_opt_price - entry_intrinsic)
+        current_intrinsic = max(0, stock_price - strike) if side == 'call' else max(0, strike - stock_price)
+        current_tv = max(0, initial_tv * combined_decay * gamma_factor)
+        opt_price = current_intrinsic + current_tv
+        
+        # 凸性修正
         if abs(stock_ret) > 0.001:
-            if abs(moneyness) < 0.005:
-                gamma_factor = 1.0 + 0.5 * math.exp(-(moneyness ** 2) / (2 * 0.002 ** 2))
-            elif abs(moneyness) > 0.02:
-                gamma_factor = 0.9
+            convexity = 0.2 * (stock_ret ** 2)
+            opt_price *= (1 + convexity)
         
-        # ===== 7. 波动率微笑 =====
-        vol_smile_adj = 1.0
-        if abs(moneyness) > 0.02:
-            vol_smile_adj = 0.95
-        elif abs(moneyness) < 0.005:
-            vol_smile_adj = 1.0
+        # 异常值保护
+        if opt_price > entry_opt_price * 5.0:
+            opt_price = entry_opt_price * 3.0
         
-        # ===== 8. 期权价格计算 =====
-        intrinsic = max(0, stock_price - strike) if side == 'call' else max(0, strike - stock_price)
-        initial_time_value = option_price_at_entry - intrinsic
-        
-        time_value = max(0, initial_time_value * combined_decay * vol_smile_adj)
-        option_price = intrinsic + time_value
-        
-        # ===== 9. Gamma 凸性修正 =====
-        if abs(stock_ret) > 0.001:
-            gamma_effect = gamma_factor * (stock_ret ** 2) * 1.5
-            option_price *= (1 + gamma_effect)
-        
-        # ===== 10. 硬性限制 =====
-        max_reasonable = option_price_at_entry * 1.2
-        option_price = min(option_price, max_reasonable)
-        return round(option_price, 2)
+        return round(max(opt_price, 0.01), 2)
 
     @staticmethod
     def _simulate_opt_price(stock_price: float, side: str, entry_stock: float, bars_held: int = 0) -> float:
@@ -355,8 +342,8 @@ class BacktestEngine:
 
     def backtest_strategy(self):
         """回测示例"""
-        entry_price = 450.0
-        option_entry = 1.80
+        entry_price = 697.42
+        option_entry = 1.5
         
         # 模拟1分钟K线回测
         for bar_num in range(390):  # 全天390根1分钟K线
