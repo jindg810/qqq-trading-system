@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """长桥 OpenAPI 适配器（封装协议转换、重试、时区、生命周期）"""
+from dataclasses import field
 import threading
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
@@ -87,18 +88,39 @@ class LongbridgeAdapter(BrokerAdapter):
                 ))
         self.qc.set_on_candlestick(_wrapper)
 
-    def history_candlesticks_by_date(self, symbol: str, period: Period, adjust_type: AdjustType, target_date: datetime) -> List[Candlestick]:
+    def _to_kline_data(self,c: Candlestick) -> KlineData:
+        if not all([
+            c.open, c.high, c.low, c.close
+        ]):
+            raise ValueError("Invalid candlestick data")
+        return KlineData(
+            ts=c.timestamp,
+            open=float(c.open),
+            high=float(c.high),
+            low=float(c.low),
+            close=float(c.close),
+            volume=float(c.volume),
+        )
+
+    def history_kline_by_date(self, symbol: str, period: str, target_date: datetime) -> List[KlineData]:
         if not self.qc: raise ConnectionError("未连接")
         try:
+            adjust_type = AdjustType.ForwardAdjust
+            r_period = getattr(Period, period)
+            if(r_period is None):
+                logger.error(f" history_kline_by_date error. 无效的period类型：{period}")
+                return
+            
             candles = self.qc.history_candlesticks_by_date(
                         symbol=symbol,
-                        period=period,
+                        period=r_period,
                         adjust_type=adjust_type,
                         start=target_date,
                         end=target_date,
                         trade_sessions=TradeSessions.Intraday # 只获取当日数据，避免跨日时区问题
                     )
-            return candles
+            klines = [self._to_kline_data(f) for f in candles]
+            return klines
         except Exception as e:
             raise BrokerError(f"历史K线数据查询失败: {e}") from e
     

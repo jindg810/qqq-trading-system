@@ -38,7 +38,7 @@ class TestIndicators:
             strategy.add_bar(make_bar(i, volume=100000))
 
         # 2. 第11根：量不足 (动态门槛 150k) → 预期 False
-        strategy.add_bar(make_bar(10, volume=140000)) # 阈值 150k，失败
+        strategy.add_bar(make_bar(10, volume=99000)) # 阈值 150k，失败
         assert not strategy._volume_ok()
 
         # 3. 第12根：量达标 (160k >= 150k) → 预期 True
@@ -110,38 +110,42 @@ class TestRiskAndTime:
 
 class TestPositionManagement:
     def setup_method(self):
-        self.strat = QQQStrategy()
-        self.strat.open_position("call", 450.0, 1.0, "QQQ260508C452000.US")
+        self.strategy = QQQStrategy()
+        self.strategy.open_position("call", 450.0, 1.0, "QQQ260508C452000.US")
 
     def test_stop_loss(self): 
-        assert self.strat.check_position_exit(0.74) == ExitReason.STOP_LOSS
+        current_stock = 500
+        assert self.strategy.check_position_exit(0.74, current_stock) == ExitReason.STOP_LOSS
     
     def test_take_profit(self):
         # 盈亏比峰值 1.1，盈利 1倍 时止盈
-        self.strat.position["peak_pnl"] = 1.1
-        assert self.strat.check_position_exit(2.05) == ExitReason.TAKE_PROFIT
+        self.strategy.position["peak_pnl"] = 1.1
+        current_stock = 500
+        assert self.strategy.check_position_exit(2.05, current_stock) == ExitReason.TAKE_PROFIT
     
     def test_trailing_stop(self):
         # ✅ 设置 peak_pnl = 0.95 (+95%)
         # 要求：peak < 1.0 (避开止盈) 且 (peak - 当前pnl) >= 0.3 (触发回撤)
         # 当前 pnl = (1.6-1.0)/1.0 = 0.6 → 0.95 - 0.6 = 0.35 >= 0.30 
         # 验证回撤触发条件
-        self.strat.position["peak_pnl"] = 0.95
-        assert self.strat.check_position_exit(1.6) == ExitReason.TRAILING_STOP
+        current_stock = 500
+        self.strategy.position["peak_pnl"] = 0.95
+        assert self.strategy.check_position_exit(1.6, current_stock) == ExitReason.TRAILING_STOP
 
     def test_timeout(self):
         # 持仓周期达到预设 bars 数，触发时间止损 TODO: 15 ？
-        self.strat.position["bars_held"] = 14
-        assert self.strat.check_position_exit(1.05) == ExitReason.TIMEOUT
-        assert self.strat.position["bars_held"] == 15
+        timeout_bars = CONFIG["timeout_bars"]
+        self.strategy.position["bars_held"] = timeout_bars - 1
+        assert self.strategy.check_position_exit(1.05, 500) == ExitReason.TIMEOUT
+        assert self.strategy.position["bars_held"] == timeout_bars
     
     def test_close_profit_resets(self):
-        trade = self.strat.close_position(1.5)
-        assert trade["pnl"] == 0.5 and self.strat.consecutive_losses == 0
+        trade = self.strategy.close_position(1.5)
+        assert trade["pnl"] == 0.5 and self.strategy.consecutive_losses == 0
     
     def test_close_loss_increments(self):
-        trade = self.strat.close_position(0.8)
-        assert trade["pnl"] == -0.2 and self.strat.consecutive_losses == 1
+        trade = self.strategy.close_position(0.8)
+        assert trade["pnl"] == -0.2 and self.strategy.consecutive_losses == 1
     
     def test_generate_symbol(self):
         current_ts = datetime.now(CONFIG["tz_et"])

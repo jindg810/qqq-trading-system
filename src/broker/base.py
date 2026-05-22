@@ -32,7 +32,7 @@ class BrokerAdapter(ABC):
     
     # 历史数据接口，适配器内部实现，用户通过回调获取数据
     @abstractmethod
-    def history_candlesticks_by_date(self, symbol: str, period: Period, adjust_type: AdjustType, target_date: datetime) -> List[Candlestick]: ...
+    def history_kline_by_date(self, symbol: str, period: str, target_date: datetime) -> List[KlineData]: ...
 
     # 订单相关接口
     @abstractmethod

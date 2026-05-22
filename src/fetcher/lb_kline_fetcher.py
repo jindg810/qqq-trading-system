@@ -15,6 +15,7 @@ import argparse
 import threading
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+import traceback
 from typing import List, Dict, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -30,8 +31,7 @@ import pandas as pd
 class DownloadConfig:
     """下载配置"""
     symbol: str = "QQQ.US"
-    period: Period = field(default_factory=lambda: Period.Min_1)
-    adjust_type: AdjustType = field(default_factory=lambda: AdjustType.ForwardAdjust)
+    period: str = "Min_1"
     trade_sessions: TradeSessions = field(default_factory=lambda: TradeSessions.All)
     base_dir: str = "../data/klines"
     max_workers: int = 3          # 并发数（建议 ≤ 3）
@@ -41,7 +41,7 @@ class DownloadConfig:
     batch_size: int = 5           # 每批处理天数
 
 
-class KlineDownloader:
+class KlineFetcher:
     """长桥 K 线下载器（单类版）"""
     def __init__(self, config: DownloadConfig, broker:BrokerAdapter):
         self.config = config
@@ -75,10 +75,9 @@ class KlineDownloader:
         """
         for attempt in range(1, self.config.retry_count + 1):
             try:
-                candles = self.broker.history_candlesticks_by_date(
+                candles = self.broker.history_kline_by_date(
                     symbol=self.config.symbol,
                     period=self.config.period,
-                    adjust_type=self.config.adjust_type,
                     target_date=target_date
                 )
                 
@@ -90,7 +89,7 @@ class KlineDownloader:
                 # 转换为标准格式
                 klines = []
                 for c in candles:
-                    raw_ts = c.timestamp
+                    raw_ts = c.ts
                     ts = raw_ts.astimezone(CONFIG["tz_et"])
                     klines.append({
                         "datetime": ts.strftime("%Y-%m-%d %H:%M:%S"),  # 统一美东标准格式，确保后续排序与可视化一致
@@ -106,6 +105,7 @@ class KlineDownloader:
             except Exception as e:
                 error_msg = f"第 {attempt}/{self.config.retry_count} 次失败: {str(e)[:50]}"
                 print(f"  ⚠️ {error_msg}")
+                traceback.print_exc()
                 
                 if attempt < self.config.retry_count:
                     # 指数退避
@@ -333,8 +333,8 @@ class KlineDownloader:
 # ==================== CLI 接口 ====================
 def main():
     '''
-    python -m src.backtest.kline_downloader --mode=month --value day='2026-05'
-    python -m src.backtest.kline_downloader --mode=day --value day='2026-05-10'
+    python -m src.fetcher.lb_kline_fetcher --mode=month --value day='2026-05'
+    python -m src.fetcher.lb_kline_fetcher --mode=day --value day='2026-05-10'
     '''
     parser = argparse.ArgumentParser(description="长桥 K 线数据下载器")
     parser.add_argument("--mode", choices=['day', 'month', 'range'], required=True,
@@ -365,7 +365,7 @@ def main():
     )
     
     # 执行下载
-    downloader = KlineDownloader(config, broker=LongbridgeAdapter())
+    downloader = KlineFetcher(config, broker=LongbridgeAdapter())
     downloader.download(args.mode, args.value)
 
 

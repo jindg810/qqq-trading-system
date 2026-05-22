@@ -7,7 +7,7 @@ from typing import Optional
 import uuid
 
 class OrderSide(Enum): BUY = "BUY"; SELL = "SELL"
-class OrderType(Enum): MARKET = "MARKET"; LIMIT = "LIMIT"
+class OrderType(Enum): MARKET = "MARKET"; LIMIT = "LIMIT"; NORMAL = "NORMAL"
 class OrderStatus(Enum): 
     PENDING = "PENDING"; FILLED = "FILLED"; PARTIALLY_FILLED = "PARTIALLY_FILLED"
     CANCELLED = "CANCELLED"; REJECTED = "REJECTED"; FAILED = "FAILED"
@@ -68,3 +68,4 @@ class KlineData:
     high: float; low: float; 
     close: float; volume: float; 
     is_confirmed: bool = True
+    
