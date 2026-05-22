@@ -48,11 +48,11 @@ class BrokerAdapter(ABC):
     
     # 订单撤销接口，返回是否成功
     @abstractmethod
-    def cancel_order(self, order_id: str) -> bool: ...
+    def cancel_order(self, order_id: str, symbol: str = None) -> bool: ...
     
     # 订单查询接口，返回订单状态等信息
     @abstractmethod
-    def check_order(self, order_id: str) -> Optional[OrderCheck]: ...
+    def check_order(self, order_id: str, symbol: str = None) -> Optional[OrderCheck]: ...
     
     # 等待事件循环，适配器内部实现，用户无需关心
     @abstractmethod

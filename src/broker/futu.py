@@ -16,7 +16,7 @@ logger = get_logger("broker.futu")
 
 # 🔑 枚举映射表（集中管理，方便后续券商替换）
 SIDE_MAP = {OrderSide.BUY: TrdSide.BUY, OrderSide.SELL: TrdSide.SELL}
-TYPE_MAP = {OrderType.MARKET: FTOrderType.MARKET, OrderType.LIMIT: FTOrderType.LIMIT_IF_TOUCHED}
+TYPE_MAP = {OrderType.MARKET: FTOrderType.MARKET, OrderType.NORMAL: FTOrderType.NORMAL, OrderType.LIMIT: FTOrderType.LIMIT_IF_TOUCHED}
 TIF_MAP = {TimeInForce.DAY: FUTimeInForce.DAY}
 _STATUS_NAME_MAP = {
     "FILLED_ALL": OrderStatus.FILLED,
@@ -44,17 +44,24 @@ class FutuAdapter(BrokerAdapter):
     def connect(self) -> None:
         try:
             self.qc = OpenQuoteContext(self.futu_host, self.futu_port)
-            #self.tc = OpenSecTradeContext(self.futu_host, self.futu_port)
+            self.tc = OpenSecTradeContext(TrdMarket.HK, self.futu_host, self.futu_port)
+            self.tc_us = OpenSecTradeContext(TrdMarket.US, self.futu_host, self.futu_port)
             self._connected = True
             logger.info(f"✅ 富途连接成功")
         except Exception as e:
             raise ConnectionError(f"富途初始化失败: {e}") from e
+
+    def _tc_(self, symbol: str) -> OpenSecTradeContext:
+        # US. 为前缀的股票使用 tc_us 连接
+        return self.tc_us if symbol is not None and symbol.startswith("US.") or symbol.endswith(".US") else self.tc
+
 
     def disconnect(self) -> None:
         self._connected = False
         if self.qc: self.qc.unsubscribe_all()
         if self.qc: self.qc.close()
         if self.tc: self.tc.close()
+        if self.tc_us: self.tc_us.close()
         logger.info("🔌 富途连接已关闭")
 
     def is_connected(self) -> bool: return self._connected
@@ -85,29 +92,7 @@ class FutuAdapter(BrokerAdapter):
             logger.error(f"⚠️ K线订阅失败。symbol={symbol}, ret={ret_sub}, message={err_message}")
 
     def set_kline_callback(self, callback: Callable[[KlineData], None]) -> None:
-        self._kline_cb = callback
-        
-        '''
-        if not getattr(event, "candlestick", False): return
-        cs = event.candlestick
-        raw_ts = getattr(cs, "timestamp", None)
-        # 🔑 安全时区转换（兼容 int毫秒 / ISO字符串 / datetime）
-        if isinstance(raw_ts, (int, float)):
-            ts = datetime.fromtimestamp(raw_ts / 1000, tz=timezone.utc).astimezone(CONFIG["tz_et"])
-        elif isinstance(raw_ts, str):
-            ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(CONFIG["tz_et"])
-        else:
-            ts = raw_ts if raw_ts.tzinfo else raw_ts.replace(tzinfo=CONFIG["tz_et"])
-        
-        if self._kline_cb:
-            self._kline_cb(KlineData(
-                ts = ts, open=float(cs.open), high = float(cs.high), 
-                low = float(cs.low), close = float(cs.close), 
-                volume = float(getattr(cs, "volume", 0)), 
-                is_confirmed = getattr(event, "is_confirmed", False)
-            ))
-        '''
-        self.qc.set_handler(KlineHandler())
+        self.qc.set_handler(KlineHandler(callback))
     
     def history_kline_by_date(self, symbol: str, kline_type: str, target_date: datetime) -> List[KlineData]:
         if not self.qc: raise ConnectionError("未连接")
@@ -187,7 +172,7 @@ class FutuAdapter(BrokerAdapter):
             raise OrderError(f"💥 期权报价查询失败: {e}") from e
      
     def submit_order(self, order: OrderRequest) -> str:
-        if not self.tc: raise ConnectionError("未连接")
+        #if not self.tc: raise ConnectionError("未连接")
         try:
             order.symbol = self._formater_(order.symbol)
             if order.type == OrderType.NORMAL and not order.price:
@@ -195,45 +180,50 @@ class FutuAdapter(BrokerAdapter):
             
             if not self._unlock_trade: return
 
-            trade_env = self.get_trade_env()
-            ret, order_resp = self.tc.place_order(
+            trade_env = self.get_trade_env() 
+            ret, order_resp = self._tc_(order.symbol).place_order(
                 code=order.symbol, 
                 qty=order.quantity,
                 trd_side=SIDE_MAP[order.side], 
                 order_type=TYPE_MAP[order.type],
                 trd_env=trade_env,
-                price=order.price if order.type == OrderType.NORMAL else None,
+                price=order.price if order.type == OrderType.NORMAL else 0,
                 time_in_force=TIF_MAP[order.time_in_force]
             )
-            if(ret != RET_OK):
+            if(ret != RET_OK or order_resp.empty):
                 logger.error(f"💥 订单提交失败: {order.symbol}-{order.client_id} -> {order_resp}")
                 return None
             else:
-                logger.debug(f"📤 订单提交: {order.symbol}-{order.client_id} -> {order_resp}")
-                return order_resp.order_id if order_resp else None
+                _order = order_resp.iloc[0]
+                logger.info(f"📤 订单提交: {order.symbol}-{order.client_id} -> {_order.order_id}")
+                return _order.order_id
         except Exception as e:
-            raise OrderError(f"订单提交失败: {e}") from e
+            raise OrderError(f"💥 订单提交失败: {e}") from e
 
-    def cancel_order(self, order_id: str) -> bool:
-        if not self.tc: return False
+    def cancel_order(self, order_id: str, symbol: str = None) -> bool:
+        #if not self.tc: return False
         try: 
             if not self._unlock_trade: return # 解锁交易
+            
             trade_env = self.get_trade_env()
-            self.tc.modify_order(ModifyOrderOp.CANCEL, order_id, 0, 0, trd_env=trade_env)
+            ret_code, data = self._tc_(symbol).modify_order(ModifyOrderOp.CANCEL, order_id, 0, 0, trd_env=trade_env)
+            if(ret_code != RET_OK or data.empty):
+                logger.error(f"💥 订单取消失败。order_id={order_id}，{ret_code}-{data}")
+                return False
             return True
         except: return False
 
-    def check_order(self, order_id: str) -> Optional[OrderCheck]:
+    def check_order(self, order_id: str, symbol: str = None) -> Optional[OrderCheck]:
         if not self.tc: return None
         try:
             trade_env = self.get_trade_env()
-            ret, orders = self.tc.order_list_query(order_id=order_id, trd_env=trade_env)
-            if(ret != RET_OK):
-                logger.error(f"💥 订单查询失败: order_id={order_id} -> {orders}")
+            ret_code, orders = self._tc_(symbol).order_list_query(order_id=order_id, trd_env=trade_env)
+            if(ret_code != RET_OK or orders.empty):
+                logger.error(f"💥 订单查询失败: order_id={order_id} -> {ret_code}:{orders}")
                 return None
             
-            o = orders[0]
-            status_name = type(o.status).__name__
+            o = orders.iloc[0]
+            status_name = type(o.order_status).__name__
             mapped_status = _STATUS_NAME_MAP.get(status_name, OrderStatus.PENDING)
             return OrderCheck(
                 order_id = order_id,
@@ -243,7 +233,7 @@ class FutuAdapter(BrokerAdapter):
                 updated_at = o.updated_time or datetime.now(CONFIG["tz_et"]) # 兜底防 None
             )
         except Exception as e:
-            raise OrderError(f"💥 订单状态查询失败: {e}") from e
+            raise OrderError(f"💥 订单状态查询失败: {order_id} -> {e}") from e
 
     def wait_for_events(self) -> None:
         """阻塞主线程等待行情/订单事件，支持 Ctrl+C 优雅退出"""
@@ -346,24 +336,38 @@ class FutuAdapter(BrokerAdapter):
         return symbol
 
 class KlineHandler(CurKlineHandlerBase):
-    def __init__(self, callback):
-        self.callback = callback
-        
+    def __init__(self, callback: Callable[[KlineData], None]):
+        self._file = None
+        self._ts: datetime = None
+        self._kline_callback = callback
+
     def on_recv_rsp(self, rsp_pb):
         ret_code, data = super(KlineHandler, self).on_recv_rsp(rsp_pb)
         if ret_code != RET_OK:
-            print(f"KlineHandler error, msg: {data}")
-            return RET_ERROR, data
-        print("CurKlineTest ", data) # CurKlineTest 自己的處理邏輯
-        return RET_OK, data
+            logger.error(f"💥 KlineHandler error, code={ret_code}, msg: {data}")
+            return
+        
+        #print("CurKlineTest ", data) # CurKlineTest 自己的處理邏輯
+        cs = data.iloc[0]
+        new_ts = datetime.strptime(cs.time_key, "%Y-%m-%d %H:%M:%S")
+        if self._ts is not None and self._ts < new_ts:
+            # 每分钟最后一条作为 is_confirmed 的k线
+            print("bbbbb...")
+            self.is_confirmed = True
+            self._ts = new_ts
+        else:
+            self._ts = new_ts
+            self.is_confirmed = False
+        
+        if self._kline_callback:
+            self._kline_callback(KlineData(
+                ts = cs.time_key, open=float(cs.open), 
+                high = float(cs.high), low = float(cs.low), 
+                close = float(cs.close), volume = float(getattr(cs, "volume", 0)), 
+                is_confirmed = self.is_confirmed
+            ))
             
 # ================= 独立 CLI 诊断测试 =================
-'''
-# 1. 基础诊断（连接/报价/K线/推送）
-python -m src.broker.futu --symbol QQQ.US
-# 2. 完整诊断（含订单流程，需手动确认 YES）
-python -m src.broker.futu --symbol QQQ.US --test-orders
-'''
 def run_diagnostic(broker: FutuAdapter, symbol: str = "QQQ.US", test_orders: bool = False):
     import time, sys, traceback
     from datetime import date
@@ -415,6 +419,8 @@ def run_diagnostic(broker: FutuAdapter, symbol: str = "QQQ.US", test_orders: boo
             recv_count += 1
             if recv_count == 1:
                 print(f"   📩 收到: {k.ts.strftime('%H:%M:%S')} | O:{k.open} C:{k.close}")
+            if k.is_confirmed:
+                print(f" 📩 confirmed kline: {k}")
         broker.set_kline_callback(_temp_cb)
         broker.subscribe_klines(symbol)
         print("   ⏳ 监听中 (等待 5 秒接收推送)...")
@@ -423,12 +429,12 @@ def run_diagnostic(broker: FutuAdapter, symbol: str = "QQQ.US", test_orders: boo
             print(f"   ✅ PASS: 共收到 {recv_count} 条实时K线推送")
         else:
             print("   ⚠️ WARN: 未收到推送 (可能当前非交易时段或网络订阅未生效)")
-
+        
         # 5. 订单流程 (高风险，默认关闭)
         if test_orders:
             print("\n📝 [6/6] 测试订单流程 (submit -> check -> cancel)...")
             print("   ⚠️ 严重警告：此测试将向交易所发送真实请求！")
-            print("   💡 请确保 .env 中配置的是长桥模拟盘(Sandbox)环境！")
+            print("   💡 请确保 .env 中配置的是证券模拟盘(Sandbox)环境！")
             confirm = input("   确认继续? (输入 YES 并回车): ")
             if confirm.strip().upper() == "YES":
                 try:
@@ -436,18 +442,21 @@ def run_diagnostic(broker: FutuAdapter, symbol: str = "QQQ.US", test_orders: boo
                     # 设置远低于市价的限价单，100% 防误成交
                     safe_price = round(q.last_price * 0.2, 2)
                     req = OrderRequest(
-                        symbol=symbol, side=OrderSide.BUY, type=OrderType.LIMIT,
-                        quantity=1, price=safe_price
+                        symbol=symbol, side=OrderSide.BUY, type=OrderType.NORMAL,
+                        quantity=100, price=safe_price
                     )
                     order_id = broker.submit_order(req)
-                    print(f"   📤 提交成功 | OrderId: {order_id} | 限价: {safe_price}")
-                    
-                    time.sleep(3)
-                    check = broker.check_order(order_id)
-                    print(f"   🔍 状态查询: {check.status.name} | 成交数: {check.filled_qty}")
-                    
-                    broker.cancel_order(order_id)
-                    print("   ✅ 撤单指令已发送 (流程测试完成)")
+                    if order_id is None:
+                         print(f"   ❌ 提交失败 | OrderId: {order_id} | 限价: {safe_price}")
+                    else:
+                        print(f"   📤 提交成功 | OrderId: {order_id} | 限价: {safe_price}")
+                        time.sleep(3)
+                        check = broker.check_order(order_id, symbol)
+                        if check: print(f"   🔍 状态查询: {check.status.name} | 成交数: {check.filled_qty}")
+                        else: print(f"   ❌ 状态查询失败: {order_id} -> {check}")
+                        
+                        broker.cancel_order(order_id, symbol)
+                        print("   ✅ 撤单指令已发送 (流程测试完成)")
                 except Exception as e:
                     print(f"   ❌ FAIL: {e}")
                     traceback.print_exc()
@@ -455,7 +464,7 @@ def run_diagnostic(broker: FutuAdapter, symbol: str = "QQQ.US", test_orders: boo
                 print("   ⏭️ 已取消订单测试")
         else:
             print("\n📝 [5/5] 跳过订单测试 (使用 --test-orders 开启)")
-
+        
     except Exception as e:
         print(f"\n💥 诊断中断: {e}")
         traceback.print_exc()
@@ -466,6 +475,12 @@ def run_diagnostic(broker: FutuAdapter, symbol: str = "QQQ.US", test_orders: boo
         print("🏁 诊断结束")
 
 if __name__ == "__main__":
+    '''
+    # 1. 基础诊断（连接/报价/K线/推送）
+    python -m src.broker.futu --symbol QQQ.US
+    # 2. 完整诊断（含订单流程，需手动确认 YES）
+    python -m src.broker.futu --symbol QQQ.US --test-orders
+    '''
     import argparse
 
     # CLI 参数解析

@@ -198,14 +198,14 @@ class LongbridgeAdapter(BrokerAdapter):
         except Exception as e:
             raise OrderError(f"订单提交失败: {e}") from e
 
-    def cancel_order(self, order_id: str) -> bool:
+    def cancel_order(self, order_id: str, symbol: str = None) -> bool:
         if not self.tc: return False
         try: 
             self.tc.cancel_order(order_id); 
             return True
         except: return False
 
-    def check_order(self, order_id: str) -> Optional[OrderCheck]:
+    def check_order(self, order_id: str, symbol: str = None) -> Optional[OrderCheck]:
         if not self.tc: return None
         try:
             orders = self.tc.today_orders(order_id=order_id)
