@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QQQ 0DTE 核心策略模块 v8.3
+QQQ 0DTE 核心策略模块 v8.4
 ✅ 纯数学/状态逻辑，不依赖长桥 SDK / 文件系统 / 网络
 ✅ 实盘与回测 100% 共用，修改一处全局生效
 """
@@ -271,8 +271,8 @@ class QQQStrategy:
             return ExitReason.TIMEOUT
         
         # 7. Gamma 风险检查
-        if self.check_gamma_risk(current_stock):
-            return ExitReason.GAMMA_RISK
+        #if self.check_gamma_risk(current_stock):
+        #    return ExitReason.GAMMA_RISK
         
         return None
 

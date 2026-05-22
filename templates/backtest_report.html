@@ -13,7 +13,7 @@
         .header h1 { margin: 0; font-size: 28px; color: var(--accent); }
         .header p { color: #636e72; margin: 5px 0 0; }
         
-        .dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 15px; margin-bottom: 30px; }
+        .dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 15px; margin-bottom: 30px; }
         .card { background: var(--card); padding: 15px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); text-align: center; }
         .card .label { font-size: 13px; color: #636e72; margin-bottom: 5px; }
         .card .value { font-size: 22px; font-weight: 700; }
@@ -39,6 +39,7 @@
     <div class="dashboard">
         <div class="card"><div class="label">总交易数</div><div class="value">{{ metrics.total_trades }}</div></div>
         <div class="card"><div class="label">胜率</div><div class="value pos">{{ "%.1f"|format(metrics.win_rate*100) }}%</div></div>
+        <div class="card"><div class="label">累计收益</div><div style="color: {{ 'green' if metrics.total_pnl > 0 else 'red' }}">${{ "%.2f"|format(metrics.total_pnl) }}</div></div>
         <div class="card"><div class="label">总收益率</div><div class="value {{ 'pos' if metrics.total_return > 0 else 'neg' }}">{{ "%.2f"|format(metrics.total_return) }}%</div></div>
         <div class="card"><div class="label">盈亏比 (PF)</div><div class="value">{{ "%.2f"|format(metrics.profit_factor) }}</div></div>
         <div class="card"><div class="label">夏普比率</div><div class="value">{{ "%.2f"|format(metrics.sharpe_ratio) }}</div></div>

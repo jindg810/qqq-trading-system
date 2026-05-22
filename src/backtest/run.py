@@ -8,9 +8,9 @@ from src.backtest.report import ReportGenerator
 
 
 if __name__ == "__main__":
-
+    # python -m src.backtest.run --start 2026-04-20 --capital 10000
     parser = argparse.ArgumentParser(description="QQQ 0DTE 专业回测引擎")
-    parser.add_argument("--start", default="2024-05-01", help="回测起始日期 (YYYY-MM-DD)")
+    parser.add_argument("--start", default="2026-04-20", help="回测起始日期 (YYYY-MM-DD)")
     parser.add_argument("--end", default="2026-05-31", help="回测结束日期 (YYYY-MM-DD)")
     parser.add_argument("--data-dir", default=str(Path.cwd()/"data/klines"), help="K线数据目录")
     parser.add_argument("--capital", type=float, default=100000.0, help="初始资金")

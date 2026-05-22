@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-量化回测报告生成器 (v8.0)
+量化回测报告生成器 (v8.4)
 ✅ 职责单一：接收 BacktestResult → 计算机构级指标 → 渲染专业 HTML 报告
 ✅ 支持动态权益曲线 Chart.js 渲染、响应式布局、自动归档
 """
@@ -41,39 +41,55 @@ class ReportGenerator:
 
     def _calculate_metrics(self) -> dict:
         df = self.trades_df
-        # ✅ 修复3：空曲线兜底，防 KeyError
-        equity = self.equity_df["equity"] if not self.equity_df.empty else pd.Series([100000.0])
+        # ✅ 空曲线兜底，防 KeyError
+        equity = self.equity_df["equity"] if not self.equity_df.empty else pd.Series([self.result.config.initial_capital])
         
-        # ✅ 修复2：pandas 正确判断列是否存在
+        # ✅ 安全处理缺失列
         if "pnl_pct" not in df.columns: df["pnl_pct"] = 0.0
         if "bars_held" not in df.columns: df["bars_held"] = 0
-        wins, losses = df[df["pnl"] > 0], df[df["pnl"] <= 0]
-        pf = wins["pnl"].sum() / abs(losses["pnl"].sum()) if not losses.empty else float('inf')
         
-        # 时间序列指标
+        wins = df[df["pnl"] > 0] if not df.empty else pd.DataFrame()
+        losses = df[df["pnl"] <= 0] if not df.empty else pd.DataFrame()
+        pf = wins["pnl"].sum() / abs(losses["pnl"].sum()) if not losses.empty and abs(losses["pnl"].sum()) > 0 else float('inf')
+        
+        # ================= 时间序列指标 =================
         rets = equity.pct_change().dropna()
-        rf_daily = 0.04 / 252
-        # ✅ 修复4：动态年化因子（适配分钟级/日终采样）
-        n_periods = len(equity) - 1
-        annual_factor = np.sqrt(252 / max(n_periods, 1)) if n_periods > 0 else 1.0
-        sharpe = (rets.mean() - rf_daily) / rets.std() * annual_factor if rets.std() > 0 and len(rets) > 1 else 0.0
-
-        mdd = ((equity.cummax() - equity) / equity.cummax()).min() if len(equity) > 1 else 0.0
-        cagr = (equity.iloc[-1] / equity.iloc[0]) ** (252 / max(n_periods, 1)) - 1 if len(equity) > 1 else 0.0
+        rf_daily = 0.04 / 252  # 无风险利率日化 (假设4%)
         
+        # ✅ 修复2：日频数据固定年化因子为 sqrt(252)，彻底摒弃错误的 n_periods 计算
+        annual_factor = np.sqrt(252)
+        
+        sharpe = 0.0
+        if len(rets) > 1 and rets.std() > 0:
+            sharpe = (rets.mean() - rf_daily) / rets.std() * annual_factor
+        
+        # ✅ 修复1：最大回撤必须用 .max() 寻找最大落差，而非 .min()
+        mdd = 0.0
+        if len(equity) > 1:
+            drawdown_series = (equity.cummax() - equity) / equity.cummax()
+            mdd = drawdown_series.max()
+            
+        # 计算 CAGR (复合年化增长率)
+        n_years = len(equity) / 252  # 假设日频，一年252个交易日
+        cagr = 0.0
+        if n_years > 0 and equity.iloc[0] > 0:
+            cagr = (equity.iloc[-1] / equity.iloc[0]) ** (1 / n_years) - 1
+
+        # ================= 组装返回字典 =================
         return {
             "total_trades": len(df),
             "win_rate": len(wins) / len(df) if len(df) > 0 else 0,
-            "total_return": (equity.iloc[-1] / equity.iloc[0] - 1) * 100,
+            "total_pnl": df["pnl"].sum() if not df.empty else 0.0,  # 累计盈亏金额
+            "total_return": (equity.iloc[-1] / equity.iloc[0] - 1) * 100 if len(equity) > 0 else 0.0,
             "profit_factor": pf,
             "sharpe_ratio": sharpe,
-            "max_drawdown": mdd * 100,
-            "calmar_ratio": cagr / abs(mdd) if mdd != 0 else 0,
+            "max_drawdown": mdd * 100,  # 转为百分比
+            "calmar_ratio": cagr / mdd if mdd > 0 else 0.0,
             "avg_win": wins["pnl"].mean() if not wins.empty else 0,
             "avg_loss": abs(losses["pnl"].mean()) if not losses.empty else 0,
-            "max_cons_loss": self._max_consecutive_loss(df),
-            "expectancy": df["pnl"].mean(),
-            "exit_dist": df["exit_reason"].value_counts(normalize=True).to_dict()
+            "max_cons_loss": self._max_consecutive_loss(df) if not df.empty else 0,
+            "expectancy": df["pnl"].mean() if not df.empty else 0,
+            "exit_dist": df["exit_reason"].value_counts(normalize=True).to_dict() if not df.empty else {}
         }
 
     def _render_html(self, metrics: dict) -> Path:

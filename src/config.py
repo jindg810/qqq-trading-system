@@ -52,10 +52,10 @@ STRATEGY_CONFIG = {
     "breakout_max": 8,  # 突破最大持仓数量
     "reversal_max": 1,  # 反转最大持仓数量
     "sl_pct": 0.25,  # 止损百分比
-    "tp_half": 1.0,  # 盈亏比达到1倍时止盈一半
+    "tp_half": 0.3,  # 盈亏比达到1倍时止盈一半
     "trail_activate": 0.05, # 移动止损激活阈值 5%
     "trail_pct": 0.15,  # 盈亏比达到50%时，回撤 15% 开始移动止损
-    "timeout_bars": 60, # 持仓超过15根K线时强制退出
+    "timeout_bars": 15, # 持仓超过15~20根K线时强制退出
     "offset": 2.0,
 }
 
@@ -65,7 +65,7 @@ RISK_CONFIG = {
     "max_consecutive_losses": 3,  # 最大连续止损次数
     "order_check_timeout": 10,  # 订单检查超时时间（秒）
     "order_check_interval": 1,  # 订单检查间隔（秒）
-    "max_position_size": 1,  # 最大持仓数量
+    "max_position_size": 10,  # 最大持仓数量
 }
 
 # ===================== 系统配置 =====================
@@ -80,7 +80,10 @@ SYSTEM_CONFIG = {
 
 # ================= LongBridge配置 ==================
 LONGBRIDGE_CONFIG = {
-    "longbridge_use_sandbox": os.getenv("LONGBRIDGE_USE_SANDBOX", "false").lower() == "true",
+    # 券商模拟环境：默认 false
+    "broker_sandbox_on": os.getenv("BROKER_SANDBOX_ON", "false").lower() == "true",
+    # longbridge 模拟环境 token 前缀（仅 longbridge 有效）
+    "broker_lb_sandbox_token_pre": os.getenv("BROKER_LB_SANDBOX_TOKEN_PRE", None)
 }
 
 # ===================== 环境配置 =====================

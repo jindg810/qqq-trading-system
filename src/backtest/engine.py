@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QQQ 0DTE 回测核心引擎 v8.3
+QQQ 0DTE 回测核心引擎 v8.4
 ✅ 核心原则：
 1. 事件驱动：严格镜像实盘 trader.py 的 _on_kline 链路 (注入→风控→信号→撮合→结算)
 2. 逻辑解耦：引擎仅负责数据驱动、资金结算、报告生成；策略逻辑 100% 委托 QQQStrategy
