@@ -4,7 +4,8 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Callable, List, Optional
 
-from longbridge.openapi import AdjustType, Candlestick, Period
+from src.config import CONFIG
+
 from .models import OptionQuote, OrderRequest, OrderCheck, Quote, KlineData
 
 class BrokerError(Exception): pass
@@ -12,7 +13,7 @@ class ConnectionError(BrokerError): pass
 class OrderError(BrokerError): pass
 
 class BrokerAdapter(ABC):
-
+    
     @abstractmethod
     def connect(self) -> None: ...
     
@@ -22,6 +23,9 @@ class BrokerAdapter(ABC):
     @abstractmethod
     def is_connected(self) -> bool: ...
     
+    @abstractmethod
+    def get_trade_env(self) -> str: ...
+
     # 行情订阅
     @abstractmethod
     def subscribe_klines(self, symbol: str) -> None: ...

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """长桥 OpenAPI 适配器（封装协议转换、重试、时区、生命周期）"""
 from dataclasses import field
+import os
 import threading
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
@@ -48,8 +49,8 @@ class LongbridgeAdapter(BrokerAdapter):
             self.tc = TradeContext(cfg)
             self._connected = True
 
-            lb_env = "🧪 模拟盘" if CONFIG.get("longbridge_use_sandbox") else "🔴 实盘"
-            logger.info(f"✅ 长桥连接成功 [{lb_env}]")
+            _env_ = str("🧪 " + self.get_trade_env())
+            logger.info(f"✅ 长桥连接成功 [{_env_}]")
         except Exception as e:
             raise ConnectionError(f"长桥初始化失败: {e}") from e
 
@@ -60,6 +61,11 @@ class LongbridgeAdapter(BrokerAdapter):
         logger.info("🔌 长桥连接已关闭")
 
     def is_connected(self) -> bool: return self._connected
+
+    def get_trade_env(self) -> str:
+        sandbox_on = CONFIG.get("broker_sandbox_on", True)
+        lb_token_pre = CONFIG.get("broker_lb_sandbox_token_pre")
+        return "模拟盘" if sandbox_on or os.getenv("LONGBRIDGE_ACCESS_TOKEN", "").startswith(lb_token_pre) else "实盘"
 
     def subscribe_klines(self, symbol: str) -> None:
         if not self.qc: raise ConnectionError("未连接")
@@ -112,11 +118,9 @@ class LongbridgeAdapter(BrokerAdapter):
                 return
             
             candles = self.qc.history_candlesticks_by_date(
-                        symbol=symbol,
-                        period=r_period,
+                        symbol=symbol, period=r_period,
                         adjust_type=adjust_type,
-                        start=target_date,
-                        end=target_date,
+                        start=target_date, end=target_date,
                         trade_sessions=TradeSessions.Intraday # 只获取当日数据，避免跨日时区问题
                     )
             klines = [self._to_kline_data(f) for f in candles]
@@ -231,12 +235,6 @@ class LongbridgeAdapter(BrokerAdapter):
 
 
 # ================= 独立 CLI 诊断测试 =================
-'''
-# 1. 基础诊断（连接/报价/K线/推送）
-python -m src.broker.longbridge --symbol QQQ.US
-# 2. 完整诊断（含订单流程，需手动确认 YES）
-python -m src.broker.longbridge --symbol QQQ.US --test-orders
-'''
 def run_diagnostic(broker: LongbridgeAdapter, symbol: str = "QQQ.US", test_orders: bool = False):
     import time, sys, traceback
     from datetime import date
@@ -274,10 +272,10 @@ def run_diagnostic(broker: LongbridgeAdapter, symbol: str = "QQQ.US", test_order
         print("\n📈 [4/6] 测试历史K线 (history_candlesticks_by_date)...")
         # 默认取今日，若非交易日会返回空列表或抛异常，属正常现象
         target_date = datetime(2026, 5, 12, tzinfo=CONFIG["tz_et"])
-        candles = broker.history_candlesticks_by_date(symbol, Period.Min_1, AdjustType.ForwardAdjust, target_date)
+        candles = broker.history_kline_by_date(symbol, "Min_1", target_date)
 
         if len(candles) > 0:
-            print(f"   ✅ PASS: 成功获取 {len(candles)} 条 1分钟K线 | 首根时间: {candles[0].timestamp}")
+            print(f"   ✅ PASS: 成功获取 {len(candles)} 条 1分钟K线 | 首根时间: {candles[0].ts}")
         else:
             print("   ⚠️ WARN: 返回0条 (可能当前非交易日或该日无数据)")
 
@@ -312,7 +310,7 @@ def run_diagnostic(broker: LongbridgeAdapter, symbol: str = "QQQ.US", test_order
                     safe_price = round(q.last_price * 0.2, 2)
                     req = OrderRequest(
                         symbol=symbol, side=OrderSide.BUY, type=OrderType.LIMIT,
-                        quantity=1, price=safe_price
+                        quantity=100, price=safe_price
                     )
                     order_id = broker.submit_order(req)
                     print(f"   📤 提交成功 | OrderId: {order_id} | 限价: {safe_price}")
@@ -341,6 +339,12 @@ def run_diagnostic(broker: LongbridgeAdapter, symbol: str = "QQQ.US", test_order
         print("🏁 诊断结束")
 
 if __name__ == "__main__":
+    '''
+    # 1. 基础诊断（连接/报价/K线/推送）
+    python -m src.broker.longbridge --symbol QQQ.US
+    # 2. 完整诊断（含订单流程，需手动确认 YES）
+    python -m src.broker.longbridge --symbol QQQ.US --test-orders
+    '''
     import argparse
 
     # CLI 参数解析

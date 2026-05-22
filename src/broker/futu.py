@@ -68,7 +68,8 @@ class FutuAdapter(BrokerAdapter):
 
     def get_trade_env(self) -> str:
         # TrdEnv：REAL，SIMULATE
-        return TrdEnv.SIMULATE
+        sandbox_on = CONFIG.get("broker_sandbox_on", True)
+        return TrdEnv.SIMULATE if sandbox_on else TrdEnv.REAL
     
     def _subscribe(self, symbol: str) -> bool:
         # Quote 之前必须先订阅
