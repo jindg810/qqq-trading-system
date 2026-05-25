@@ -1,6 +1,6 @@
 #!/bin/bash
 
-CURRENT_DATE=$(date -v-1d +%Y-%m-%d)
+CURRENT_DATE=$(date -v-2d +%Y-%m-%d)
 #CURRENT_DATE=$(date -d "yesterday" +%Y-%m-%d)
 
 # daily 1m-kline

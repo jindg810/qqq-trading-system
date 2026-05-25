@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QQQ 0DTE 实盘交易引擎 v6.2 (策略分离版)
+QQQ 0DTE 实盘交易引擎 v8.5
 ✅ 仅负责：长桥API交互 / 订单执行 / 状态持久化 / CSV归档 / 异常重试
 ✅ 策略逻辑 100% 委托至 core.strategy
 """
@@ -17,7 +17,7 @@ from src.message.notifier import Notifier
 from src.config import CONFIG
 from src.logger import get_logger
 from src.core.trader_data import TraderDataManager
-from src.core.strategy import QQQStrategy
+from src.core.strategy import ExitReason, QQQStrategy
 from src.broker.base import BrokerAdapter
 from src.broker.models import (
     OrderRequest, OrderCheck, Quote, KlineData,
@@ -28,7 +28,7 @@ load_dotenv()
 logger = get_logger("core.trader")
 
 class QQQTrader:
-    def __init__(self, broker: BrokerAdapter):
+    def __init__(self, broker: BrokerAdapter, futu_broker: BrokerAdapter):
         logger.system("初始化交易引擎 v6.2...")
         self.data_manager = TraderDataManager()
         self.strategy = QQQStrategy()  # 🔑 注入核心策略
@@ -42,6 +42,7 @@ class QQQTrader:
         self._load_state()
 
         self.broker = broker  # 🔑 依赖注入
+        self.futu_broker = futu_broker
         self.broker.connect() # 🔑 显式接管连接生命周期
         logger.info("✅ 券商接口连接成功")
 
@@ -90,6 +91,7 @@ class QQQTrader:
                     continue
                 
                 if order.filled_qty > 0 and order.filled_price > 0:
+                    logger.info(f"订单成交。 qty={order.filled_qty}, price={order.filled_price:.2f}")
                     return float(order.filled_price)
                 if order.status in (OrderStatus.Canceled, OrderStatus.Rejected, OrderStatus.Failed):
                     logger.warning(f"订单 {order_id} 状态: {order.status}，终止轮询")
@@ -103,16 +105,20 @@ class QQQTrader:
         except: pass
         return None
 
-    def _execute_open(self, side: str, stock_price: float):
+    def _execute_open(self, side: str, stock_price: float) -> bool:
         try:
             current_ts = datetime.now(CONFIG["tz_et"])
+            if self.strategy.position or not self.strategy.is_trading_hours(current_ts): 
+                # 已开仓 or 禁止交易时间，忽略开仓信号
+                return False
+            
+            if not CONFIG.get("auto_trade_on", False):
+                logger.info(f"💧 自动交易关闭中。开仓参数: {symbol} @ {stock_price:.2f} | side: {side}")
+                return False
+            
             symbol = QQQStrategy.generate_option_symbol(stock_price, side, current_ts)
             if symbol is None:
                 logger.error(f"尝试失败，无法生成期权合约代码: price={stock_price}, side={side}")
-                return False
-
-            if not CONFIG.get("auto_trade_on", False):
-                logger.info(f"💧 自动交易关闭中。开仓参数: {symbol} @ {stock_price:.2f} | side: {side}")
                 return False
             
             logger.info(f"📈 尝试开仓: {symbol}")
@@ -133,13 +139,15 @@ class QQQTrader:
             
             fill_price = self._wait_for_order_fill(order_id)
             if not fill_price: return False
-            
-            # 抓取最新报价确认成交价
+            '''
+            # 抓取最新报价确认成交价 
+            # ?? 为啥要查期权价格作为成交价格 ？
             time.sleep(1)
             quote = self.broker.quote_option(symbol)
             if quote and quote.last_price > 0:
                 fill_price = quote.last_price
-                
+            '''
+            
             self.strategy.open_position(side, stock_price, fill_price, symbol)
             self._save_state()
             Notifier().notify_open(symbol, fill_price, side) 
@@ -149,29 +157,36 @@ class QQQTrader:
             logger.error(f"开仓失败: {e}")
             return False
 
-    def _execute_close(self, exit_reason: str):
+    def _execute_close(self, exit_reason: str, max_retries: int = 3):
         if not self.strategy.position: return
         symbol = self.strategy.position["symbol"]
         logger.info(f"📉 尝试平仓 [{exit_reason}]: {symbol}")
-        try:
-            order = OrderRequest(
-                symbol=symbol,
-                quantity=CONFIG["max_position_size"],
-                side=OrderSide.SELL,
-                type=OrderType.MARKET,
-                time_in_force=TimeInForce.DAY,
-            )
-            order_id = self.broker.submit_order(order)
-            fill_price = self._wait_for_order_fill(order_id)
-            if fill_price:
-                trade = self.strategy.close_position(fill_price)
-                Notifier().notify_close(symbol, fill_price, trade["pnl"], exit_reason)
-                logger.info(f"✅ 平仓成功 @ {fill_price:.2f} | 盈亏: {trade['pnl']:+.2f}")
-            self._save_state()
-        except Exception as e:
-            logger.error(f"平仓异常: {e}")
-            # 
-            if self.strategy.position: self._save_state()
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                order = OrderRequest(
+                    symbol=symbol,
+                    quantity=CONFIG["max_position_size"],
+                    side=OrderSide.SELL,
+                    type=OrderType.MARKET,
+                    time_in_force=TimeInForce.DAY,
+                )
+                order_id = self.broker.submit_order(order)
+                fill_price = self._wait_for_order_fill(order_id)
+                if fill_price:
+                    trade = self.strategy.close_position(fill_price)
+                    Notifier().notify_close(symbol, fill_price, trade["pnl"], exit_reason)
+                    logger.info(f"✅ 平仓成功 @ {fill_price:.2f} | 盈亏: {trade['pnl']:+.2f}")
+                    self._save_state()
+                    return
+                else: logger.warning(f"⚠️ 平仓第 {attempt} 次超时/失败")
+            except Exception as e:
+                logger.error(f"平仓异常: {e}")
+                if self.strategy.position: self._save_state()
+        
+        # 🔑 致命告警：重试耗尽仍未平仓
+        logger.critical(f"🚨🚨🚨 平仓彻底失败！敞口暴露: {symbol} | 原因: {exit_reason}")
+        Notifier().notify_risk_fuse("平仓失败告警", f"合约 {symbol} 连续 {max_retries} 次平仓失败，请立即人工介入！")
 
     # ================= 行情回调 =================
     def _on_kline(self, event: KlineData):
@@ -184,30 +199,38 @@ class QQQTrader:
                 "low": event.low, "close": event.close,
                 "volume": event.volume, "ts": event.ts,
             }
-            
-            # 1. 注入策略缓冲
-            if not self.strategy.add_bar(bar): return
-
-            # 2. 每日重置与CSV归档
             bar_date = ts_time.date()
+            
+            # 1. 每日重置与CSV归档
             # ✅ 核心优化：严格大于才触发，彻底杜绝重启当日重复执行
             if self._current_date is None or bar_date > self._current_date:
+                if self.strategy.position:
+                    # 🔑 启动时/跨日时，强制清理隔夜幽灵持仓
+                    logger.critical(f"🚨 发现隔夜幽灵持仓，强制注销: {self.strategy.position['symbol']}")
+                    Notifier().notify_risk_fuse("隔夜持仓清理", "程序重启发现历史持仓，已强制注销状态")
+                    self.strategy.position = None
+                
                 logger.info(f"跨日交易状态重置&数据归档, date:{self._current_date}")
                 self.strategy.reset_daily()
                 self._current_date = bar_date
                 self.data_manager.archive_csv()
                 self._save_state()  # 跨日切换后立即落盘，防断电丢失
+
+            # 2. 注入 K 线缓存：确保 SMA/Volume 等指标连续计算，不被过滤切断
+            if not self.strategy.add_bar(bar): return
             self.data_manager.write_kline_to_csv(bar)
 
-            # 3. 盘前/盘后静默
-            #if not (datetime(2000,1,1,9,30).time() <= bar["ts"].time() <= datetime(2000,1,1,16,0).time()):
-             #   return
-            if not self.strategy.is_trading_hours(bar["ts"]): 
-                self._check_position_exit() # 交易时间段自定义禁止期检查仓位，如尾盘半小时平仓
+            # 3. EOD 强制平仓 (15:55 ET 触发，绝不姑息) 。抵不过佣金 ？？
+            if self.strategy.position and ts_time.time() >= time(15, 55):
+                logger.warning("🌇 盘尾触发 EOD 强制平仓")
+                self._execute_close(ExitReason.EOD_FORCE)
                 return
 
+            # 3. 仓位管理, 避免在交易时间判断之后
+            if self.strategy.position:
+                self._check_position_exit()
+
             # 4. 风控检查：日亏损限额 & 连续止损次数
-            # if not self.strategy.check_risk(): return
             if not self.strategy.check_risk():
                 reason = "日亏损熔断" if self.strategy.daily_pnl <= CONFIG["max_daily_loss"] else "连续止损熔断"
                 Notifier().notify_risk_fuse(reason, f"账户状态: 连亏 {self.strategy.consecutive_losses} 次 | 日盈亏 {self.strategy.daily_pnl}")
@@ -215,18 +238,16 @@ class QQQTrader:
             
             # 5. 交易频次控制
             total_limit = CONFIG.get("breakout_max", 8) + CONFIG.get("reversal_max", 1)
-            if self.strategy.trades_today >= total_limit:
-                self._check_position_exit()
+            if self.strategy.trades_today + 1 > total_limit:
+                logger.warning(f"交易频次已达控制次数，停止开仓。trades_today={self.strategy.trades_today} limit={total_limit}")
                 return
                 
             # 6. 信号与持仓管理
             if not self.strategy.position:
                 sig = self.strategy.generate_signal()
-                if sig: Notifier().notify_signal(sig, bar["close"], reason="突破/反转触发")
-                if sig and self.strategy.trades_today < CONFIG.get("breakout_max", 8):
+                if sig: 
+                    Notifier().notify_signal(sig, bar["close"], reason="突破/反转触发")
                     self._execute_open(sig, bar["close"])
-            else:
-                self._check_position_exit()
                 
             self._save_state()
         except Exception as e:
@@ -236,11 +257,13 @@ class QQQTrader:
     def _check_position_exit(self):
         """REST轮询期权价格并委托策略判断退出"""
         if not self.strategy.position: return
-        if time.time() - self.last_opt_poll < 15: return
+        if time.time() - self.last_opt_poll < 15: return  # ？？TODO 
         self.last_opt_poll = time.time()
         
         try:
-            quote = self.broker.quote_option(self.strategy.position["symbol"])
+            # 因权限问题，改用 futu 查询期权
+            quote = self.futu_broker.quote_option(self.strategy.position["symbol"])
+            # quote = self.broker.quote_option(self.strategy.position["symbol"])
             if quote and quote.last_price > 0:
                 exit_reason = self.strategy.check_position_exit(float(quote.last_price))
                 if exit_reason:

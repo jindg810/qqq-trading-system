@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QQQ 交易系统配置文件
+QQQ 交易系统配置文件 v8.5
 - 集中管理所有配置参数
 - 自动创建所需目录
 """
@@ -56,6 +56,7 @@ STRATEGY_CONFIG = {
     "trail_activate": 0.05, # 移动止损激活阈值 5%
     "trail_pct": 0.15,  # 盈亏比达到50%时，回撤 15% 开始移动止损
     "timeout_bars": 15, # 持仓超过15~20根K线时强制退出
+    "timeout_pnl_pct": 0.10, # 持仓超时时小于此盈利比例，直接走人
     "offset": 2.0,
 }
 
