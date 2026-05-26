@@ -117,11 +117,11 @@ class QQQStrategy:
         
         if cnt < 20:
             # 不足20根时动态提高门槛，上限1倍
-            base_volume = 80000
+            base_volume = 50000
             curr_volume = self.bars[-1]["volume"]
             dynamic_mult = min(CONFIG["vol_mult"] * (20 / cnt), 1)
             avg_vol = sum(self.sma20_vol) / cnt
-            is_ok = curr_volume >=base_volume and curr_volume >= avg_vol * dynamic_mult
+            is_ok = curr_volume >= base_volume and curr_volume >= avg_vol * dynamic_mult
             #if is_ok: logger.info(f"valume_ok: {self.bars[-1]['ts']} -> {self.bars[-1]['volume']} >= {avg_vol * dynamic_mult}")
             return is_ok
         
@@ -208,8 +208,8 @@ class QQQStrategy:
         atr_pct = atr_avg / self.bars[-1]["close"]
         
         # ✅ 使用百分比阈值，动态适应价格水平
-        # 0DTE 期权在 1 分钟级别，0.05% 是一个合理的起点
-        THRESHOLD_PCT = 0.0004
+        # 0DTE 期权在 1 分钟级别，0.03% 是一个合理的起点
+        THRESHOLD_PCT = 0.0003
         if atr_pct < THRESHOLD_PCT:
             # logger.info(f"⏸️ ATR过滤: 波动率{atr_pct:.4%} < 阈值{THRESHOLD_PCT:.4%}")
             return False
@@ -222,28 +222,52 @@ class QQQStrategy:
         
         entry_opt = self.position["entry_opt"]
         side = self.position["side"]
+        entry_stock = self.position["entry_stock"]
+        
+        # 1. 标的硬止损 (最高优先级，无视期权报价，期权价格止损容易被 IV 欺骗)
+        # 最大允许标的反向波动 0.4%
+        underlying_sl_pct = 0.004 
+        if side == "call" and current_stock <= entry_stock * (1 - underlying_sl_pct):
+            logger.critical(f"🚨 触发标的硬止损 (Call): 标的跌至 {current_stock:.2f}, 入场 {entry_stock:.2f}")
+            return ExitReason.STOP_LOSS
+        if side == "put" and current_stock >= entry_stock * (1 + underlying_sl_pct):
+            logger.critical(f"🚨 触发标的硬止损 (Put): 标的涨至 {current_stock:.2f}, 入场 {entry_stock:.2f}")
+            return ExitReason.STOP_LOSS
+        
+        # 如果期权无报价
+        if current_opt_price is None or current_opt_price <= 0:
+            return None
         
         # 1. 计算当前盈亏比例
         current_pnl_pct = (current_opt_price - entry_opt) / entry_opt
 
-        # 2. 更新峰值盈亏（记录最高盈利）
+        # 2. 时间止损(无视期权报价)
+        self.position["bars_held"] = self.position.get("bars_held", 0) + 1
+        bars_held = self.position["bars_held"]
+        max_bars = CONFIG.get("timeout_bars", 15)  # 最多持仓15分钟
+        timeout_pnl_pct = CONFIG.get("timeout_pnl_pct", 0.10) # 持仓超时盈利要求
+        if bars_held >= max_bars and current_pnl_pct < timeout_pnl_pct: # 15分钟后若盈利不足10%，直接走人
+            logger.info(f"超时平仓触发：bars_held={bars_held}, 最多持仓={max_bars}, 盈利：{current_pnl_pct}")
+            return ExitReason.TIMEOUT
+
+        # 3. 更新峰值盈亏（记录最高盈利）
         peak_pnl = self.position.get("peak_pnl", 0)
         if current_pnl_pct > peak_pnl:
             self.position["peak_pnl"] = current_pnl_pct
             peak_pnl = current_pnl_pct
         
-        # 3. 固定止损（期权价格层面）
+        # 4. 固定止损（期权价格层面）
         sl_threshold = CONFIG.get("sl_pct", 0.15)  # 例如 0.15 = 15%
         if current_pnl_pct <= -sl_threshold:
             logger.info(f"📉 固定止损触发: 止损阈值={sl_threshold:.1%}, 当前={current_pnl_pct:.1%}")
             return ExitReason.STOP_LOSS
         
-        # 4. 固定止盈
+        # 5. 固定止盈
         tp_threshold = CONFIG.get("tp_half", 1.0)  # 例如 1.0, 即 1 倍
         if current_pnl_pct >= tp_threshold:
             return ExitReason.TAKE_PROFIT
         
-        # 5. 移动止损（核心修复）
+        # 6. 移动止损（核心修复）
         trail_activate = CONFIG.get("trail_activate", 0.05)  # 激活阈值 5%
         trail_drop = CONFIG.get("trail_pct", 0.15)  # 回撤比例 15%
         
@@ -254,25 +278,6 @@ class QQQStrategy:
                 logger.info(f"📉 移动止损触发: 峰值={peak_pnl:.1%}, 当前={current_pnl_pct:.1%}, 回撤={drawdown:.1%}")
                 return ExitReason.TRAILING_STOP
         
-        # 6. 时间止损
-        self.position["bars_held"] = self.position.get("bars_held", 0) + 1
-        bars_held = self.position["bars_held"]
-        max_bars = CONFIG.get("timeout_bars", 15)  # 最多持仓15分钟
-        timeout_pnl_pct = CONFIG.get("timeout_pnl_pct", 0.10) # 持仓超时盈利要求
-        if bars_held >= max_bars and current_pnl_pct < timeout_pnl_pct: # 15分钟后若盈利不足10%，直接走人
-            logger.info(f"超时平仓触发：bars_held={bars_held}, 最多持仓={max_bars}, 盈利：{current_pnl_pct}")
-            return ExitReason.TIMEOUT
-        
-        # 期权价格止损容易被 IV 欺骗，必须加上标的价格的防线。
-        # 最大允许标的反向波动 0.4%
-        underlying_sl_pct = 0.004 
-        entry_stock = self.position["entry_stock"]
-        if side == "call" and current_stock <= entry_stock * (1 - underlying_sl_pct):
-            logger.critical(f"🚨 触发标的硬止损 (Call): 标的跌至 {current_stock:.2f}, 入场 {entry_stock:.2f}")
-            return ExitReason.STOP_LOSS
-        if side == "put" and current_stock >= entry_stock * (1 + underlying_sl_pct):
-            logger.critical(f"🚨 触发标的硬止损 (Put): 标的涨至 {current_stock:.2f}, 入场 {entry_stock:.2f}")
-            return ExitReason.STOP_LOSS
         # 7. Gamma 风险检查
         #if self.check_gamma_risk(current_stock):
         #    return ExitReason.GAMMA_RISK

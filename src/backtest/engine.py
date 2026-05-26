@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QQQ 0DTE 回测核心引擎 v8.4
+QQQ 0DTE 回测核心引擎 v8.7
 ✅ 核心原则：
 1. 事件驱动：严格镜像实盘 trader.py 的 _on_kline 链路 (注入→风控→信号→撮合→结算)
 2. 逻辑解耦：引擎仅负责数据驱动、资金结算、报告生成；策略逻辑 100% 委托 QQQStrategy
@@ -92,6 +92,9 @@ class BacktestEngine:
         self.data_loader = DataLoader(config)
         self.opt_provider = OptionPriceProvider()
 
+        self.pending_signal: Optional[str] = None
+        self.pending_bar: Optional[Dict[str, Any]] = None
+
     def run(self) -> BacktestResult:
         bars = self.data_loader.load_bars()
         logger.info(f"🚀 启动回测 | {len(bars)} 根K线 | 资金: ${self.current_capital:.2f}")
@@ -121,71 +124,85 @@ class BacktestEngine:
             self._force_close_eod()  # 🔑 0DTE 必须当日清仓
             self.strategy.reset_daily()
             self._current_date = bar_date
+            self.pending_signal = None
+            self.pending_bar = None
 
-        # 2. 优先注入 K 线：确保 SMA/Volume 等指标连续计算，不被过滤切断
+        # 🔑 2. T+1 延迟撮合开仓 (使用当前 bar 的 Open 模拟实盘延迟)
+        if self.pending_signal and not self.strategy.position:
+            # 防数据断点：若时间差超过 2 分钟，或已临近收盘(15:55)，则废弃信号
+            time_diff = (bar_ts - self.pending_bar["ts"]).total_seconds()
+            if time_diff <= 120 and bar_ts.time() < time(15, 55):
+                self._execute_delayed_open(bar)
+            else:
+                logger.debug(f"⚠️ 信号超时或临近收盘，废弃: {self.pending_signal}")
+            self.pending_signal = None
+            self.pending_bar = None
+
+        # 3. 优先注入 K 线：确保 SMA/Volume 等指标连续计算，不被过滤切断
         if not self.strategy.add_bar(bar): return
         
+        # 4. EOD 强制平仓 (15:55 触发)
+        if self.strategy.position and bar_ts.time() >= time(15, 55):
+            self._force_close_eod()
+            return  # 强平后本根K线不再产生新信号
+        
+        # 5. 仓位管理与信号生成
         if self.strategy.position:
-            # 3. 仓位管理
             self._monitor_position(bar)
         else:
-            # 4. 处理开仓信号
-            self._handle_open_signal(bar)
+            # self._handle_open_signal(bar)
+            if self.strategy.check_risk() and self.strategy.is_trading_hours(bar_ts):
+                sig = self.strategy.generate_signal()
+                if sig and self.strategy.trades_today < CONFIG.get("breakout_max", 8):
+                    # 🔑 暂存信号，等待下一根 Bar 撮合
+                    self.pending_signal = sig
+                    self.pending_bar = bar
 
-
-    def _handle_open_signal(self, bar: Dict[str, Any]):
-        """处理开仓信号"""
-        if self.strategy.position or not self.strategy.check_risk() \
-            or not self.strategy.is_trading_hours(bar["ts"]): 
-            # 已开仓 or 风控熔断（日亏损/连亏/紧急停止） or 禁止交易时间
-            # 忽略开仓信号
-            return 
+    def _execute_delayed_open(self, fill_bar: Dict[str, Any]):
+        # 执行 T+1 延迟开仓， fill_bar: T+1 分钟实际成交的 Bar
+        sig = self.pending_signal
+        signal_bar = self.pending_bar
         
-        # 信号确认 & 频次控制
-        sig = self.strategy.generate_signal()
-        if sig and self.strategy.trades_today < CONFIG.get("breakout_max", 8):
-            stock_price = bar["close"]
-            # 模拟期权入场价（基于标的价格动态估算）
-            current_time = bar["ts"]
-            symbol = QQQStrategy.generate_option_symbol(stock_price, sig, current_time)
-            #option_price_at_entry = self.config.option_price
-            #entry_opt = self._simulate_opt_price_v12(stock_price, sig, stock_price, 0, current_time, option_price_at_entry)
-            entry_opt = self.opt_provider.get_price(current_time, symbol)
-            if entry_opt is None:
-                logger.warning(f"💥 Invalid option price. {symbol}, ts={current_time}")
-                return
+        stock_price_ref = signal_bar["close"] # 用 T 分钟 Close 决定行权价
+        current_time = fill_bar["ts"]
+        symbol = QQQStrategy.generate_option_symbol(stock_price_ref, sig, current_time)
+        
+        # 获取期权价格
+        entry_opt = self.opt_provider.get_price(current_time, symbol)
+        if entry_opt is None:
+            logger.warning(f"💥 T+1撮合缺失期权价，放弃: {symbol}, ts={current_time}")
+            return
             
-            # 🔑 应用买入滑点（买入价上浮，模拟不利成交）
-            fill_price = entry_opt * (1 + self.config.slippage_pct)
+        # 应用买入滑点
+        fill_price = entry_opt * (1 + self.config.slippage_pct)
+        
+        # 检查资金
+        required_capital = fill_price * 100 * self.config.max_position_size + self.config.commission
+        if self.current_capital < required_capital:
+            logger.warning(f"💸 资金不足: 需要 ${required_capital:.2f}, 拥有 ${self.current_capital:.2f}")
+            return
 
-            # 检查可用资金
-            required_capital = fill_price * 100 * self.config.max_position_size + self.config.commission
-            if self.current_capital < required_capital:
-                logger.warning(f"💸 资金不足: 需要 ${required_capital:.2f}, 拥有 ${self.current_capital:.2f}")
-                return
-            
-            # 执行开仓记录
-            self.strategy.open_position(sig, stock_price, fill_price, symbol, entry_ts=bar["ts"])
-            # ✅ 开仓资金结算：扣除权利金 + 开仓单边手续费
-            open_cost = fill_price * 100 * self.config.max_position_size + self.config.commission
-            self.current_capital -= open_cost
+        # 🔑 执行开仓（标的入场价记录为 T+1 的 Open，更贴近实盘）
+        fill_stock_price = fill_bar["open"]
+        self.strategy.open_position(sig, fill_stock_price, fill_price, symbol, entry_ts=current_time)
+        self.current_capital -= required_capital
 
     def _monitor_position(self, bar: Dict[str, Any]):
         """监控持仓（实时计算模拟期权价，委托策略判断止盈/止损）"""
         current_stock = bar["close"]
         entry_stock = self.strategy.position["entry_stock"]
-
-        # 计算当前期权理论价（未含滑点）
-        #option_price_at_entry = self.config.option_price
-        #current_time = bar["ts"]
-        #bars_held= self.strategy.position["bars_held"]
-        #base_opt_price = self._simulate_opt_price_v12(current_stock, self.strategy.position["side"], entry_stock, bars_held, current_time, option_price_at_entry)
         symbol = self.strategy.position["symbol"]
+        
         # 🔑 优先获取真实历史价格
         base_opt_price = self.opt_provider.get_price(bar["ts"], symbol)
         if base_opt_price is None:
             logger.warning(f"💥 invalid option price. {symbol}, ts={bar['ts']}");
-            return
+            # 计算当前期权理论价（未含滑点）
+            option_price_at_entry = self.strategy.position["entry_opt"]
+            current_time = bar["ts"]
+            bars_held= self.strategy.position["bars_held"]
+            base_opt_price = self._simulate_opt_price_v12(current_stock, self.strategy.position["side"], entry_stock, bars_held, current_time, option_price_at_entry)
+            #return
 
         # 🔑 应用平仓滑点（卖出价下浮）
         current_opt_price = base_opt_price * (1 - self.config.slippage_pct)
@@ -300,41 +317,6 @@ class BacktestEngine:
             opt_price = entry_opt_price * 3.0
         
         return round(max(opt_price, 0.01), 2)
-
-    @staticmethod
-    def _simulate_opt_price(stock_price: float, side: str, entry_stock: float, bars_held: int = 0) -> float:
-        """
-        改进的 0DTE ±$2 OTM 期权定价模型
-        基于 Black-Scholes 思想，但大幅简化计算
-        iv: 默认年化波动率 18%（QQQ 典型值）
-        """
-        if entry_stock <= 0: return 0.80
-
-        # 1. 确定行权价
-        strike = entry_stock + 2.0 if side == 'call' else entry_stock - 2.0
-        # 2. 剩余时间（分钟）
-        minutes_remaining = max(390 - bars_held, 1)  # 至少1分钟
-        # 3. 简化的 Black-Scholes 近似
-        # 计算 d1（忽略无风险利率，对短期期权影响很小）
-        iv = 0.22
-        T = minutes_remaining / (252 * 390)  # 年化时间
-        if T <= 0: return 0.01
-        d1 = (math.log(stock_price / strike) + 0.5 * iv**2 * T) / (iv * math.sqrt(T))
-        
-        # 4. 使用近似公式（避免复杂计算）
-        
-        if side == 'call':
-            # 看涨期权价格 ≈ S * N(d1) - K * discount * N(d2)
-            # 简化：N(d1) ≈ 0.5 + d1 * 0.1（当 |d1| < 2 时近似）
-            nd1 = 0.5 + d1 * 0.1
-            price = stock_price * nd1 - strike * math.exp(-0.045 * T) * (nd1 - iv * math.sqrt(T) * 0.1)
-        else:
-            # 看跌期权价格 ≈ K * discount * N(-d2) - S * N(-d1)
-            nd1 = 0.5 + d1 * 0.1
-            price = (strike * math.exp(-0.045 * T) * (1 - nd1 + iv * math.sqrt(T) * 0.1) - stock_price * (1 - nd1))
-
-        # 5. 确保价格合理性
-        return max(price, 0.01)
 
     def _record_equity(self, ts: datetime):
         """记录权益快照，用于后续绘制资金曲线"""

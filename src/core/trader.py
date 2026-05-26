@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QQQ 0DTE 实盘交易引擎 v8.5
+QQQ 0DTE 实盘交易引擎 v8.7
 ✅ 仅负责：长桥API交互 / 订单执行 / 状态持久化 / CSV归档 / 异常重试
 ✅ 策略逻辑 100% 委托至 core.strategy
 """
@@ -9,9 +9,10 @@ import time
 import threading
 import traceback
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 
+from src.broker.futu import FutuAdapter
 from src.broker.longbridge import LongbridgeAdapter
 from src.message.notifier import Notifier
 from src.config import CONFIG
@@ -44,6 +45,7 @@ class QQQTrader:
         self.broker = broker  # 🔑 依赖注入
         self.futu_broker = futu_broker
         self.broker.connect() # 🔑 显式接管连接生命周期
+        self.futu_broker.connect()
         logger.info("✅ 券商接口连接成功")
 
     def _load_state(self):
@@ -148,7 +150,7 @@ class QQQTrader:
                 fill_price = quote.last_price
             '''
             
-            self.strategy.open_position(side, stock_price, fill_price, symbol)
+            self.strategy.open_position(side, stock_price, fill_price, symbol, entry_ts=current_ts)
             self._save_state()
             Notifier().notify_open(symbol, fill_price, side) 
             logger.info(f"✅ 开仓成功: {symbol} @ {fill_price:.2f}")
@@ -191,15 +193,14 @@ class QQQTrader:
     # ================= 行情回调 =================
     def _on_kline(self, event: KlineData):
         try:
-            if not getattr(event, "is_confirmed", False): return
-            ts_time = event.ts if isinstance(event.ts, datetime) else datetime.strptime(event.ts, "%Y-%m-%dT%H:%M:%SZ")
-            print(f"收到K线数据: {ts_time.strftime('%Y-%m-%dT%H:%M:%SZ')}, {event} ")
             bar = {
                 "open": event.open, "high": event.high,
                 "low": event.low, "close": event.close,
                 "volume": event.volume, "ts": event.ts,
             }
+            ts_time = event.ts if isinstance(event.ts, datetime) else datetime.strptime(event.ts, "%Y-%m-%dT%H:%M:%SZ")
             bar_date = ts_time.date()
+            print(f"收到K线数据: {ts_time.strftime('%Y-%m-%d %H:%M:%S')}, {event} ")
             
             # 1. 每日重置与CSV归档
             # ✅ 核心优化：严格大于才触发，彻底杜绝重启当日重复执行
@@ -216,19 +217,21 @@ class QQQTrader:
                 self.data_manager.archive_csv()
                 self._save_state()  # 跨日切换后立即落盘，防断电丢失
 
+            # 2. 仓位管理：检查风险及平仓
+            if self.strategy.position: self._check_position_exit(bar) 
+            
+            # k 线完结才开仓
+            if not getattr(event, "is_confirmed", False): return
+
             # 2. 注入 K 线缓存：确保 SMA/Volume 等指标连续计算，不被过滤切断
             if not self.strategy.add_bar(bar): return
             self.data_manager.write_kline_to_csv(bar)
 
             # 3. EOD 强制平仓 (15:55 ET 触发，绝不姑息) 。抵不过佣金 ？？
-            if self.strategy.position and ts_time.time() >= time(15, 55):
+            if self.strategy.position and ts_time.hour == 15 and ts_time.minute >= 55:
                 logger.warning("🌇 盘尾触发 EOD 强制平仓")
                 self._execute_close(ExitReason.EOD_FORCE)
                 return
-
-            # 3. 仓位管理, 避免在交易时间判断之后
-            if self.strategy.position:
-                self._check_position_exit()
 
             # 4. 风控检查：日亏损限额 & 连续止损次数
             if not self.strategy.check_risk():
@@ -254,20 +257,26 @@ class QQQTrader:
             logger.error(f"行情处理异常: {e}")
             traceback.print_exc()
 
-    def _check_position_exit(self):
+    def _check_position_exit(self, bar: Dict[str, Any]):
         """REST轮询期权价格并委托策略判断退出"""
         if not self.strategy.position: return
-        if time.time() - self.last_opt_poll < 15: return  # ？？TODO 
+
+        # 降频轮询控制 (防止 API 限流)，限制为 3 秒
+        if time.time() - self.last_opt_poll < 3: return
         self.last_opt_poll = time.time()
+        
+        symbol = self.strategy.position["symbol"]
+        current_stock = bar["close"]
         
         try:
             # 因权限问题，改用 futu 查询期权
-            quote = self.futu_broker.quote_option(self.strategy.position["symbol"])
-            # quote = self.broker.quote_option(self.strategy.position["symbol"])
-            if quote and quote.last_price > 0:
-                exit_reason = self.strategy.check_position_exit(float(quote.last_price))
-                if exit_reason:
-                    self._execute_close(exit_reason)
+            quote = self.futu_broker.quote_option(symbol)
+            # quote = self.broker.quote_option(symbol)
+            current_opt_price = float(quote.last_price) if quote and quote.last_price > 0 else None
+            exit_reason = self.strategy.check_position_exit(current_opt_price, current_stock)
+            
+            # 执行裁决
+            if exit_reason: self._execute_close(exit_reason)
         except Exception as e:
             logger.warning(f"持仓监控异常: {e}")
 
@@ -292,11 +301,13 @@ class QQQTrader:
             finally:
                 if self.strategy.position: self._execute_close("FORCE_CLOSE")
                 self._save_state()
+                if self.broker: self.broker.disconnect()
+                if self.futu_broker: self.futu_broker.disconnect()
                 logger.info("🛑 交易引擎已安全停止")
 
 if __name__ == "__main__":
     try:
-        trader = QQQTrader(broker=LongbridgeAdapter())
+        trader = QQQTrader(broker=LongbridgeAdapter(), futu_broker=FutuAdapter())
         trader.start()
     except Exception as e:
         logger.critical(f"💥 致命错误: {e}")
