@@ -51,6 +51,15 @@ class QQQTrader:
     def _load_state(self):
         state = self.data_manager.load_state()
         if state:
+            pos = state.get("position")
+            # 把字符串解析回 datetime，并补上美东时区
+            if pos and pos.get("entry_ts"):
+                try:
+                    pos["entry_ts"] = datetime.strptime(pos["entry_ts"], "%Y-%m-%d %H:%M:%S")
+                    pos["entry_ts"] = pos["entry_ts"].replace(tzinfo=CONFIG["tz_et"])
+                except ValueError:
+                    pos["entry_ts"] = None  # 解析失败兜底
+
             # 恢复策略状态
             self.strategy.position = state.get("position")
             self.strategy.trades_today = state.get("trades_today", 0)
@@ -63,10 +72,15 @@ class QQQTrader:
             self._current_date = datetime.strptime(last_date_str, "%Y-%m-%d").date() if last_date_str else None
 
     def _save_state(self):
+         # entry_ts 为时间对角无法存储，格式化成字符串
+        pos = self.strategy.position.copy() if self.strategy.position else None
+        if pos and pos.get("entry_ts"):
+            pos["entry_ts"] = pos["entry_ts"].strftime("%Y-%m-%d %H:%M:%S")
+
         state = {
             "updated": datetime.now(CONFIG["tz_et"]).strftime("%Y-%m-%d %H:%M:%S"),
             "running": True,
-            "position": self.strategy.position,
+            "position": pos, # use copy
             "trades_today": self.strategy.trades_today,
             "consecutive_losses": self.strategy.consecutive_losses,
             "daily_pnl": round(self.strategy.daily_pnl, 2),
