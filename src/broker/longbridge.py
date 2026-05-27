@@ -83,7 +83,9 @@ class LongbridgeAdapter(BrokerAdapter):
             elif isinstance(raw_ts, str):
                 ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(CONFIG["tz_et"])
             else:
-                ts = raw_ts if raw_ts.tzinfo else raw_ts.replace(tzinfo=CONFIG["tz_et"])
+                #ts = raw_ts if raw_ts.tzinfo else raw_ts.replace(tzinfo=CONFIG["tz_et"])
+                ts = raw_ts if raw_ts.tzinfo else raw_ts.replace(tzinfo=CONFIG["tz_cn"])
+            #print(f"raw_ts={raw_ts}, ts={ts}")
             
             if self._kline_cb:
                 self._kline_cb(KlineData(

@@ -64,7 +64,7 @@ class QQQTrader:
 
     def _save_state(self):
         state = {
-            "updated": datetime.now(CONFIG["tz_et"]).isoformat(),
+            "updated": datetime.now(CONFIG["tz_et"]).strftime("%Y-%m-%d %H:%M:%S"),
             "running": True,
             "position": self.strategy.position,
             "trades_today": self.strategy.trades_today,
@@ -76,7 +76,7 @@ class QQQTrader:
         self.data_manager.save_state(state)
 
     def _trace_state(self):
-        logger.debug(f"当前状态: \
+        logger.info(f"当前状态: \
                      持仓: {self.strategy.position}, 今日交易次数: {self.strategy.trades_today}, \
                      连续亏损: {self.strategy.consecutive_losses}, 日盈亏: {self.strategy.daily_pnl:.2f}, \
                      紧急停止: {self.strategy.emergency_stopped}, 当前日期: {self._current_date}")
@@ -93,13 +93,14 @@ class QQQTrader:
                     continue
                 
                 if order.filled_qty > 0 and order.filled_price > 0:
-                    logger.info(f"订单成交。 qty={order.filled_qty}, price={order.filled_price:.2f}")
+                    logger.info(f"✅ 订单成交。 order_id={order_id}, qty={order.filled_qty}, price={order.filled_price:.2f}")
                     return float(order.filled_price)
-                if order.status in (OrderStatus.Canceled, OrderStatus.Rejected, OrderStatus.Failed):
-                    logger.warning(f"订单 {order_id} 状态: {order.status}，终止轮询")
+                if order.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.FAILED):
+                    logger.warning(f"⚠️ 订单 {order_id} 状态: {order.status}，终止轮询")
                     return None
             except Exception as e:
-                logger.warning(f"查询订单状态失败: {e}")
+                logger.warning(f"⚠️ 查询订单状态失败: {e}")
+                traceback.print_exc()
             time.sleep(CONFIG.get("order_check_interval", 1))
         try: 
             self.broker.cancel_order(order_id)
@@ -200,7 +201,6 @@ class QQQTrader:
             }
             ts_time = event.ts if isinstance(event.ts, datetime) else datetime.strptime(event.ts, "%Y-%m-%dT%H:%M:%SZ")
             bar_date = ts_time.date()
-            print(f"收到K线数据: {ts_time.strftime('%Y-%m-%d %H:%M:%S')}, {event} ")
             
             # 1. 每日重置与CSV归档
             # ✅ 核心优化：严格大于才触发，彻底杜绝重启当日重复执行
@@ -222,6 +222,7 @@ class QQQTrader:
             
             # k 线完结才开仓
             if not getattr(event, "is_confirmed", False): return
+            print(f"收到K线数据: {ts_time.strftime('%Y-%m-%d %H:%M:%S')}, {event} ")
 
             # 2. 注入 K 线缓存：确保 SMA/Volume 等指标连续计算，不被过滤切断
             if not self.strategy.add_bar(bar): return

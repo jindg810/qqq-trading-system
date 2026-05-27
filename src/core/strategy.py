@@ -28,7 +28,9 @@ class QQQStrategy:
         self.bars = deque(maxlen=200)
         self.sma20_vol = deque(maxlen=20)
         self.last_bar_ts = None
-        
+        self.cum_tp_vol = 0.0  # 累计 (典型价 * 成交量)
+        self.cum_vol = 0.0     # 累计成交量
+
         # 交易状态
         self.position: Optional[Dict[str, Any]] = None
         self.trades_today = 0
@@ -42,6 +44,8 @@ class QQQStrategy:
         self.consecutive_losses = 0
         self.daily_pnl = 0.0
         self.emergency_stopped = False
+        self.cum_tp_vol = 0.0
+        self.cum_vol = 0.0
 
     def add_bar(self, bar: Dict[str, Any]) -> bool:
         """注入新K线并更新缓冲（含时间戳防乱序校验）"""
@@ -50,11 +54,22 @@ class QQQStrategy:
             logger.warning(f"⏰ 乱序或重复K线被丢弃: {current_ts} <= {self.last_bar_ts}")
             return False  # 乱序/重复K线拦截
         
+        # 🔑 增量更新 VWAP 数据
+        typical_price = (bar["high"] + bar["low"] + bar["close"]) / 3.0
+        self.cum_tp_vol += typical_price * bar["volume"]
+        self.cum_vol += bar["volume"]
         self.last_bar_ts = current_ts
         self.bars.append(bar)
         self.sma20_vol.append(bar.get("volume", 0))
+        
+        # bars_held + 1
+        self.position["bars_held"] = self.position.get("bars_held", 0) + 1
         return True
 
+    def _get_vwap(self) -> Optional[float]:
+        """获取当前日内 VWAP"""
+        return self.cum_tp_vol / self.cum_vol if self.cum_vol > 0 else None
+    
     # ================= 风控检查 =================
     def check_risk(self) -> bool:
         if self.emergency_stopped: return False
@@ -95,6 +110,7 @@ class QQQStrategy:
         
         # 2. 检查交易时间
         if not self.is_trading_hours(self.bars[-1]["ts"]): return None
+        #print(f"generate_signal. bar_ts={self.bars[-1]['ts']}")
 
         # 3. 双信号引擎：突破和反转
         if sig := self._breakout_signal(): return sig
@@ -159,20 +175,64 @@ class QQQStrategy:
         if body < CONFIG.get("min_body_pct", 0.0003): return None
         if not self._volume_ok(): return None
         
+        # ================= 🔑 机构级微观过滤器 =================
+        # 1. K线闭合强度 (CLV) - 拒绝长影线假突破
+        hl_range = last["high"] - last["low"]
+        clv = ((last["close"] - last["low"]) - (last["high"] - last["close"])) / hl_range if hl_range > 0 else 0
+            
+        # 2. 波动率收缩 (VCP) - 寻找弹簧压缩后的爆发
+        recent_range = sum(b["high"] - b["low"] for b in list(self.bars)[-6:-1]) / 5
+        older_range = sum(b["high"] - b["low"] for b in list(self.bars)[-21:-6]) / 15
+        is_vcp = recent_range < older_range * 0.95  # 近期振幅必须小于长期振幅
+        
+        # 3. 爆量滞涨陷阱 (Effort vs Result)
+        avg_vol = sum(b["volume"] for b in list(self.bars)[-11:-1]) / 10
+        avg_body = sum(abs(b["close"] - b["open"]) for b in list(self.bars)[-11:-1]) / 10
+        is_trap = (last["volume"] > avg_vol * 2.0) and (body < avg_body * 1.2)
+        
+        # 4. 日内 VWAP 锚定
+        vwap = self._get_vwap()
+
+        # ================= 信号裁决 =================
         sma = self._sma20_price()
         if sma is None: return None
         
+        last = self.bars[-1]
+        body_pct = abs(last["close"] - last["open"]) / last["open"]
+        # 🔑 核心过滤：如果 1 分钟 K 线实体涨幅超过 0.15% (约 1 美元)，视为动能透支，放弃追高
+        if body_pct > 0.0015:
+            # logger.debug(f"⏸️ 动能透支过滤: 实体涨幅 {body_pct:.3%}")
+            return None
+
+        if last["close"] > upper and last["close"] > sma:
+            # 🟢 Call 突破条件
+            if clv < 0.5: return None          # 收盘不够强（上影线长）
+            if is_trap: return None            # 爆量滞涨（诱多）
+            if vwap and last["close"] < vwap: return None  # 被 VWAP 压制
+            
+            # (可选) 如果开启了严格的 VCP 过滤，取消下面这行的注释
+            # if not is_vcp: return None 
+            
+            return "call"
+        
+        if last["close"] < lower and last["close"] < sma:
+            ## 🔴 Put 突破条件
+            if clv > -0.5: return None         # 收盘不够弱（下影线长）
+            if is_trap: return None            # 爆量滞涨（诱空）
+            if vwap and last["close"] > vwap: return None  # 被 VWAP 支撑
+            
+            return "put"
         """
         1. 当前价格突破最近5根K线的最高价（看涨）或最低价（看跌）
         2. 当前价格在SMA20上方（看涨）或下方（看跌）
         3. 当前K线为阳线（看涨）或阴线（看跌）
-        """
         if last["close"] > upper and last["close"] > sma and last["close"] > last["open"]:
             #logger.info(f"✅ breakout Call({last['ts']}) -> {last['close']} > {upper}, {last['close']} > {sma}, {last['close']} > {last['open']}")
             return "call"
         if last["close"] < lower and last["close"] < sma and last["close"] < last["open"]:
             #logger.info(f"✅ breakout Put({last['ts']}) -> {last['close']} < {lower}, {last['close']} < {sma}, {last['close']} < {last['open']}")
             return "put"
+        """
         return None
 
     def _reversal_signal(self) -> Optional[str]:
@@ -226,7 +286,7 @@ class QQQStrategy:
         
         # 1. 标的硬止损 (最高优先级，无视期权报价，期权价格止损容易被 IV 欺骗)
         # 最大允许标的反向波动 0.4%
-        underlying_sl_pct = 0.004 
+        underlying_sl_pct = 0.0025 
         if side == "call" and current_stock <= entry_stock * (1 - underlying_sl_pct):
             logger.critical(f"🚨 触发标的硬止损 (Call): 标的跌至 {current_stock:.2f}, 入场 {entry_stock:.2f}")
             return ExitReason.STOP_LOSS
@@ -242,10 +302,12 @@ class QQQStrategy:
         current_pnl_pct = (current_opt_price - entry_opt) / entry_opt
 
         # 2. 时间止损(无视期权报价)
-        self.position["bars_held"] = self.position.get("bars_held", 0) + 1
+        # k 线完结才 +1 self.position["bars_held"] = self.position.get("bars_held", 0) + 1
         bars_held = self.position["bars_held"]
         max_bars = CONFIG.get("timeout_bars", 15)  # 最多持仓15分钟
         timeout_pnl_pct = CONFIG.get("timeout_pnl_pct", 0.10) # 持仓超时盈利要求
+        if 5 < bars_held <= 15 and current_pnl_pct < 0.0:
+            return ExitReason.TIMEOUT
         if bars_held >= max_bars and current_pnl_pct < timeout_pnl_pct: # 15分钟后若盈利不足10%，直接走人
             logger.info(f"超时平仓触发：bars_held={bars_held}, 最多持仓={max_bars}, 盈利：{current_pnl_pct}")
             return ExitReason.TIMEOUT

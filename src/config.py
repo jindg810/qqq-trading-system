@@ -42,6 +42,7 @@ load_dotenv()
 SYMBOL = "QQQ.US"
 TIMEZONE = "America/New_York"
 TZ_ET = ZoneInfo(TIMEZONE)
+TZ_CN = ZoneInfo("Asia/Shanghai") 
 
 # ===================== 策略参数 =====================
 STRATEGY_CONFIG = {
@@ -98,6 +99,7 @@ def get_config():
         "symbol": SYMBOL,
         "timezone": TIMEZONE,
         "tz_et": TZ_ET,
+        "tz_cn": TZ_CN,
         **STRATEGY_CONFIG,
         **RISK_CONFIG,
         **SYSTEM_CONFIG,

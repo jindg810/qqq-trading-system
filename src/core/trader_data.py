@@ -108,7 +108,7 @@ class TraderDataManager:
                 shutil.move(temp_path, CONFIG["state_file"])
                 return True
             except Exception as e:
-                logger.error(f"保存状态文件失败: {e}")
+                logger.error(f"保存状态文件失败: {e}, state_data={state_data}")
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
                 return False
